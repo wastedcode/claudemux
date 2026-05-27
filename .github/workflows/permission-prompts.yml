@@ -1,0 +1,94 @@
+name: permission-prompts fixture re-validation
+
+# Re-validates the permission-prompt classifier fixture on every push by
+# replaying each scenario's trigger inside a container with --network=none
+# and --read-only. If the recorded `promptTextSnippet` no longer appears in
+# the captured pane for a scenario, the classifier predicate is drifting
+# from upstream claude and we must update before shipping.
+#
+# Reference: research/findings.md §4.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Daily 06:43 UTC for drift detection independent of merge cadence.
+    - cron: '43 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-fixture:
+    name: Validate fixture schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci || npm i
+      - name: Validate fixture schema
+        run: npx tsx research/fixtures/validate-fixture.ts
+
+  replay-scenarios:
+    name: Replay fixture scenarios inside a sandbox container
+    runs-on: ubuntu-latest
+    needs: validate-fixture
+    container:
+      # Pinned image with claude + tmux preinstalled is the production
+      # target; the placeholder below runs ubuntu:24.04 and installs at
+      # job time. Replace with the pinned digest once published.
+      image: ubuntu:24.04
+      options: >-
+        --network=none
+        --read-only
+        --tmpfs /tmp:rw,exec,size=512m
+        --tmpfs /scratch:rw,size=64m
+        --tmpfs /home/runner:rw,exec,size=512m
+    env:
+      HOME: /tmp/sandbox-home
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Belt-and-braces: refuse to run if cwd or HOME look real"
+        run: |
+          set -euo pipefail
+          cwd=$(pwd)
+          if [ "$cwd" = "/" ] || [ "$cwd" = "$HOME" ]; then
+            echo "Refusing to run: cwd ($cwd) looks like a real root or real HOME"
+            exit 1
+          fi
+          case "$HOME" in
+            /home/runner|/Users/*|/home/*)
+              if [ -d "$HOME/.ssh" ] || [ -f "$HOME/.bashrc" ]; then
+                echo "Refusing to run: \$HOME ($HOME) looks like a non-ephemeral real-home pattern"
+                exit 1
+              fi
+              ;;
+          esac
+          mkdir -p "$HOME"
+
+      - name: Install tmux + node (read-only image, install into tmpfs)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends tmux curl ca-certificates
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs
+
+      - name: Install claude (pinned to fixture's claudeVersion)
+        run: |
+          version=$(node -e "console.log(require('./research/fixtures/permission-prompt-classifier-fixture.json').claudeVersion)")
+          # Production: install the EXACT pinned version. Placeholder below
+          # uses the public installer with no version pin until claude
+          # publishes versioned install URLs.
+          echo "Target claude version per fixture: $version"
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run Vitest replay
+        run: |
+          npm i -D vitest tsx
+          npx vitest run research/fixtures/permission-prompts.test.ts \
+            --reporter=verbose
