@@ -277,12 +277,44 @@ What is in place:
    that loops over fixture scenarios under the harness primitives (private
    tmux socket, sandbox HOME, per-scenario timeout 30s, output cap 64 KB).
    Skips with an explanatory message when `scenarios` is empty.
-4. **`.github/workflows/permission-prompts.yml`** — containerized re-validation
-   workflow. Two jobs: `validate-fixture` (lint-time schema check) and
-   `replay-scenarios` (Vitest inside a container with `--network=none
-   --read-only --tmpfs /tmp:rw,exec,size=512m` etc.). Belt-and-braces step
-   refuses to run if cwd looks like a repo root or `$HOME` matches a
-   non-ephemeral real-home pattern.
+4. **`.github/workflows/permission-prompts.yml`** — re-validation workflow with
+   network isolation applied to the **test step** (via `docker run
+   --network=none --read-only` against a job-built image), not to the
+   prerequisite install steps. Two jobs: `validate-fixture` (lint-time
+   schema check) and `replay-scenarios` (builds an isolation image, then
+   runs Vitest inside it). Belt-and-braces step refuses to run if cwd or
+   `$HOME` somehow look real after isolation. Path filters on the `push`
+   and `pull_request` triggers scope CI cost to fixture/workflow/classifier
+   changes only.
+
+   This was rewritten in response to security-audit F1
+   (`brain/initiatives/claudemux-v0-0-1-pre-build-research/security-audit.md`):
+   the previous shape declared `--network=none` at the job's `container:`
+   level, which prevented its own steps from installing tmux / node /
+   claude — a non-functional safety guard. The current shape moves the
+   isolation guard onto the step that actually needs it (the test
+   execution under `docker run`) while letting installs run on a plain
+   runner. The "preferred" path per the audit (a GHCR-pinned image
+   referenced by digest) is the next escalation when the substrate ships
+   and a release of the test image becomes worth maintaining.
+
+   The empty-fixture case (`scenarios: []`) takes a short-circuit branch
+   that runs Vitest directly on the plain runner (no Docker, no claude
+   install, no network isolation) because the test self-skips when
+   scenarios is empty. The full isolated path activates the moment a
+   scenario is added to the fixture. Net effect: **the workflow runs
+   green today against the empty fixture, and the substrate-build
+   acceptance pass that populates `scenarios` switches it into live
+   drift-detection without any further structural change** — at which
+   point the security audit's acceptance condition ("watched to run green
+   against a populated fixture") becomes the substrate-verdict gate.
+
+   Glyph canary `.github/workflows/glyph-canary.yml` was also hardened in
+   the same pass: the auto-filed-issue body's `claude --version` string
+   moved from inline `${{ steps.… }}` interpolation into `env:`
+   indirection (`env.CLAUDE_VERSION` → `process.env.CLAUDE_VERSION`), per
+   the GHA template-injection guidance — closes the audit's soft footgun
+   note on `glyph-canary.yml:111-117`.
 
 ### Per `claude --help`, the relevant flags
 
