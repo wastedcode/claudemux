@@ -1,0 +1,41 @@
+{
+  "name": "claudemux",
+  "version": "0.0.1",
+  "description": "Drive long-lived Claude Code sessions from Node without writing tmux glue. await session.wait() actually returns when the agent is done.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "claudemux": "./bin/claudemux"
+  },
+  "files": ["dist/", "bin/", "README.md", "LICENSE", "CHANGELOG.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "test": "vitest run",
+    "test:unit": "vitest run --dir src",
+    "test:integration": "vitest run --dir test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
