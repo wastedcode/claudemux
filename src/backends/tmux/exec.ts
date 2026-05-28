@@ -4,6 +4,35 @@ import { Emitter } from "../../util/emitter.js";
 import type { BackendEvent } from "../types.js";
 
 /**
+ * tmux stderr patterns that indicate "the backend's server is not reachable
+ * on this socket." Older tmux says `no server running on /tmp/.../sock`;
+ * tmux ≥3.3 says `error connecting to /tmp/.../sock (No such file or
+ * directory)`. We treat both as the same condition (server's gone).
+ *
+ * Single-source — callers (`sessions.ts`, `classifyTmuxFailure`) import
+ * from here so the regex can't drift.
+ */
+export function isNoServerStderr(text: string): boolean {
+  return /no server running on/i.test(text) || /error connecting to /i.test(text);
+}
+
+/**
+ * tmux stderr substrings that indicate "the target you asked about doesn't
+ * exist on this server." tmux emits different `can't find …:` strings
+ * depending on which level of the `session:window.pane` grammar failed.
+ * All three are semantically "the session you wanted isn't here" — callers
+ * that need a boolean (`hasSession`) treat them all as "no" rather than
+ * letting the routine `can't find pane:`/`can't find window:` shapes
+ * escape as `SessionGone` throws.
+ */
+const SESSION_GONE_PATTERNS = ["can't find session:", "can't find pane:", "can't find window:"];
+
+export function isSessionGoneStderr(text: string): boolean {
+  const lower = text.toLowerCase();
+  return SESSION_GONE_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
  * Raw result of one tmux invocation. Callers (sessions.ts, keys.ts,
  * capture.ts) interpret this — typed errors are thrown at the caller, not
  * here, because only the caller knows the session-name context for the error.
@@ -91,10 +120,17 @@ export class TmuxExec {
           reject(new BackendUnreachable(sessionName, spawnErr));
           return;
         }
-        // "no server running" — tmux is on PATH but its server is down on
-        // a connect-only operation. Promote to BackendUnreachable.
-        if (exit !== 0 && /no server running on/i.test(stderr)) {
-          reject(new BackendUnreachable(sessionName, new Error(stderr.trim())));
+        // tmux is on PATH but its server is down on a connect-only
+        // operation. Both shapes ("no server running on …" and
+        // "error connecting to …") are the same condition — promote.
+        // Don't echo the raw stderr (it leaks "tmux" via the socket path).
+        if (exit !== 0 && isNoServerStderr(stderr)) {
+          reject(
+            new BackendUnreachable(
+              sessionName,
+              new Error("no server running on the configured socket"),
+            ),
+          );
           return;
         }
         resolve({ exit, stdout, stderr, durationMs });
@@ -102,9 +138,6 @@ export class TmuxExec {
     });
   }
 }
-
-/** Lowercase substrings tmux emits on stderr for the "target gone" Case B. */
-const SESSION_GONE_PATTERNS = ["can't find session:", "can't find pane:", "can't find window:"];
 
 /**
  * Classify a non-zero `TmuxResult` into a typed error. Callers use this when
@@ -116,6 +149,11 @@ const SESSION_GONE_PATTERNS = ["can't find session:", "can't find pane:", "can't
  *
  * `sessionName` is the requested target (so the error carries the right
  * context even when tmux's stderr names something else).
+ *
+ * Order matters: `BackendUnreachable` (no server) > `SessionGone` (target
+ * doesn't exist) > `BackendError` (unrecognized failure). A BackendError
+ * leaks the raw tmux argv into its `.message`; promoting the routine
+ * failure modes above it keeps argv out of user-visible error text.
  */
 export function classifyTmuxFailure(
   sessionName: string,
@@ -123,8 +161,16 @@ export function classifyTmuxFailure(
   result: TmuxResult,
 ): Error | null {
   if (result.exit === 0) return null;
-  const lcStderr = result.stderr.toLowerCase();
-  if (SESSION_GONE_PATTERNS.some((p) => lcStderr.includes(p))) {
+  if (isNoServerStderr(result.stderr)) {
+    // Don't echo the backend's stderr (path + "tmux" substring leak).
+    // The clean public summary tells the user what they can do; the raw
+    // stderr is still available via observability (`onBackendCommand`).
+    return new BackendUnreachable(
+      sessionName,
+      new Error("no server running on the configured socket"),
+    );
+  }
+  if (isSessionGoneStderr(result.stderr)) {
     return new SessionGone(sessionName);
   }
   return new BackendError(sessionName, argv, result.exit, result.stderr);

@@ -19,7 +19,7 @@ describe("public surface — exports", () => {
     expect(publicSurface.claude.name).toBe("claude");
   });
 
-  it("exports the eight typed errors plus the base class", () => {
+  it("exports the typed errors plus the base class", () => {
     const expected = [
       "ClaudemuxError",
       "SessionExists",
@@ -30,6 +30,7 @@ describe("public surface — exports", () => {
       "SessionGone",
       "BackendUnreachable",
       "BackendError",
+      "InvalidSessionName",
     ] as const;
     for (const name of expected) {
       expect(typeof (publicSurface as Record<string, unknown>)[name]).toBe("function");

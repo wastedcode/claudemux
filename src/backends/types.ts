@@ -47,6 +47,19 @@ export interface SessionRef {
 }
 
 /**
+ * Format a {@link SessionRef} as the human-readable label used in error
+ * messages and observability output. The substrate's public label format
+ * is `<namespace>/<name>` — distinct from any backend's internal encoding
+ * (the tmux backend, for example, uses `<namespace>--<name>` internally).
+ *
+ * One place; one format; rename here if the user-facing label ever changes
+ * (e.g. to `<namespace>:<name>`).
+ */
+export function formatSessionLabel(ref: SessionRef): string {
+  return `${ref.namespace}/${ref.name}`;
+}
+
+/**
  * The substrate's view of one named pane in a backend. Implemented by
  * `src/backends/tmux/index.ts` for v0.0.1; future backends (node-pty,
  * `CustomPaneBackend`) implement the same interface.

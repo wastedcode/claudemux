@@ -21,56 +21,51 @@ import { hasSession } from "./sessions.js";
  * (silent input drop trap — see `engineer/wiki/tmux-pane-death-detection`).
  * We check `has-session` first; if the session is gone, throw `SessionGone`
  * rather than letting the paste land in the void.
+ *
+ * `label` is the user-facing identifier used in error messages (defaults to
+ * `target`); the wrapper in `tmuxBackend` passes the public label.
  */
-export async function pasteText(exec: TmuxExec, target: string, text: string): Promise<void> {
-  await ensureLive(exec, target);
+export async function pasteText(
+  exec: TmuxExec,
+  target: string,
+  text: string,
+  label: string = target,
+): Promise<void> {
+  await ensureLive(exec, target, label);
 
-  // Normalize line terminators: \r\n → \n, lone \r → \n. Inside the
-  // bracketed paste, every line break is a literal newline in the input box,
-  // never a submit. Submit is `Enter` outside the brackets.
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-  // Per-call buffer name so concurrent pastes can't collide.
   const bufferName = `claudemux-${randomBytes(4).toString("hex")}`;
 
-  // load-buffer reads the body from stdin via the `-` argument.
   {
     const args = ["load-buffer", "-b", bufferName, "-"];
-    const r = await exec.run(args, { sessionName: target, input: normalized });
-    const err = classifyTmuxFailure(target, ["tmux", ...args], r);
+    const r = await exec.run(args, { sessionName: label, input: normalized });
+    const err = classifyTmuxFailure(label, ["tmux", ...args], r);
     if (err) throw err;
   }
 
-  // paste-buffer -p emits bracketed sequences when the receiver supports them.
-  // -d deletes the buffer after pasting (so we don't litter tmux's buffer list).
   {
     const args = ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", target];
-    const r = await exec.run(args, { sessionName: target });
-    const err = classifyTmuxFailure(target, ["tmux", ...args], r);
+    const r = await exec.run(args, { sessionName: label });
+    const err = classifyTmuxFailure(label, ["tmux", ...args], r);
     if (err) throw err;
   }
 }
 
-/**
- * Send a named key to the session. Used for both REPL submission (`Enter`
- * after a paste) and dialog responses (`1`, `2`, `y`, `n`, `Escape`).
- *
- * Pre-checks liveness like {@link pasteText}.
- */
 export async function sendKey(
   exec: TmuxExec,
   target: string,
   key: "Enter" | "Escape" | "1" | "2" | "y" | "n",
+  label: string = target,
 ): Promise<void> {
-  await ensureLive(exec, target);
+  await ensureLive(exec, target, label);
   const args = ["send-keys", "-t", target, key];
-  const r = await exec.run(args, { sessionName: target });
-  const err = classifyTmuxFailure(target, ["tmux", ...args], r);
+  const r = await exec.run(args, { sessionName: label });
+  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
   if (err) throw err;
 }
 
-async function ensureLive(exec: TmuxExec, target: string): Promise<void> {
-  if (!(await hasSession(exec, target))) {
-    throw new SessionGone(target);
+async function ensureLive(exec: TmuxExec, target: string, label: string): Promise<void> {
+  if (!(await hasSession(exec, target, label))) {
+    throw new SessionGone(label);
   }
 }

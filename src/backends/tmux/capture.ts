@@ -19,21 +19,22 @@ import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./
 export async function capturePane(
   exec: TmuxExec,
   target: string,
-  opts: { ansi?: boolean; lines?: number } = {},
+  opts: { ansi?: boolean; lines?: number; label?: string } = {},
 ): Promise<string> {
+  const label = opts.label ?? target;
   const args = ["capture-pane", "-p"];
   if (opts.ansi === true) args.push("-e");
   args.push("-t", target);
 
-  const r = await exec.run(args, { sessionName: target });
-  const err = classifyTmuxFailure(target, ["tmux", ...args], r);
+  const r = await exec.run(args, { sessionName: label });
+  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
   if (err) throw err;
 
   // Surface Case A pane-death loudly — Case B (session gone) is already
   // surfaced by classifyTmuxFailure above. The annotation lands in stdout.
   const signal = detectPaneDeadAnnotation(r.stdout);
   if (signal !== null) {
-    throw new PaneDead(target, signal);
+    throw new PaneDead(label, signal);
   }
 
   if (opts.lines !== undefined && opts.lines > 0) {

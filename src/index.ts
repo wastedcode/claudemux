@@ -12,14 +12,15 @@ export type { AgentDef, BootDialog } from "./agents/types.js";
 
 export {
   BackendError,
+  BackendUnreachable,
   ClaudemuxError,
   DialogStuck,
+  InvalidSessionName,
   LoginRequired,
   PaneDead,
   ReplTimeout,
   SessionExists,
   SessionGone,
-  BackendUnreachable,
 } from "./errors.js";
 
 export { create } from "./session/create.js";

@@ -115,6 +115,37 @@ export class BackendUnreachable extends ClaudemuxError {
 }
 
 /**
+ * Thrown by `create` / `spawn` when the session name or namespace contains
+ * characters that the substrate cannot encode safely for the backend's
+ * target grammar. The substrate fails fast at the boundary instead of
+ * silently renaming and producing an un-addressable handle.
+ *
+ * @remarks
+ * Reserved set: `.`, `:`, `*`, `?`, leading `-`, any whitespace, `/`,
+ * `\n`, `\r`, `\\`, and the empty string.
+ */
+export class InvalidSessionName extends ClaudemuxError {
+  /** Which field was invalid (`"name"` or `"namespace"`). */
+  readonly field: "name" | "namespace";
+  /** The actual value the caller passed. */
+  readonly value: string;
+  /** The reason the value is rejected. */
+  readonly reason: string;
+
+  constructor(field: "name" | "namespace", value: string, reason: string) {
+    super(
+      `invalid ${field} ${JSON.stringify(value)}: ${reason}`,
+      // Use the offending value itself so the error has *some* identifier.
+      // The session was never created; there is no real name to use.
+      `<invalid-${field}>`,
+    );
+    this.field = field;
+    this.value = value;
+    this.reason = reason;
+  }
+}
+
+/**
  * Wrapper for an unexpected backend failure that isn't one of the typed
  * cases above (non-zero exit + unrecognized stderr). Carries the argv and
  * stderr so consumers can diagnose without a `console.log` in the library.

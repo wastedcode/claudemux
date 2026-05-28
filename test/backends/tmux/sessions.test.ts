@@ -32,7 +32,10 @@ describe("TmuxExec — discipline + spawn-time errors", () => {
   it("every invocation carries -L <socket> -f /dev/null", async () => {
     const observed: string[][] = [];
     exec.onCommand((e) => observed.push(e.argv));
-    await exec.run(["list-sessions", "-F", "#{session_name}"]);
+    // list-sessions against an empty server now (correctly) promotes to
+    // BackendUnreachable — we only care about the observed argv here, so
+    // swallow the rejection.
+    await exec.run(["list-sessions", "-F", "#{session_name}"]).catch(() => undefined);
     expect(observed).toHaveLength(1);
     const argv = observed[0];
     expect(argv).toBeDefined();

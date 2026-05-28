@@ -1,5 +1,10 @@
-import { SessionGone } from "../../errors.js";
-import { type TmuxExec, classifyTmuxFailure } from "./exec.js";
+import { BackendUnreachable, SessionGone } from "../../errors.js";
+import {
+  type TmuxExec,
+  classifyTmuxFailure,
+  isNoServerStderr,
+  isSessionGoneStderr,
+} from "./exec.js";
 import { serverOptionsArgv } from "./options.js";
 
 /**
@@ -32,9 +37,12 @@ export async function newSession(
     env?: Record<string, string>;
     cmd: string;
     argv: string[];
+    /** User-facing label for error messages (defaults to tmux target encoding). */
+    label?: string;
   },
 ): Promise<void> {
   const target = targetOf(o.namespace, o.name);
+  const label = o.label ?? target;
 
   // Build new-session argv. Env vars (caller-supplied) ride on `-e KEY=VAL`
   // pairs at new-session time — `set-environment` after new-session would
@@ -64,48 +72,67 @@ export async function newSession(
   // followed by `set-option -g` doesn't work — globals must be set in the
   // same invocation that registers the first session.
   const argv = [...serverOptionsArgv(), ...newSessionCmd];
-  const r = await exec.run(argv, { sessionName: target });
-  const err = classifyTmuxFailure(target, ["tmux", ...argv], r);
+  const r = await exec.run(argv, { sessionName: label });
+  const err = classifyTmuxFailure(label, ["tmux", ...argv], r);
   if (err) throw err;
 }
 
-/** Is the named session currently alive on the server? */
-export async function hasSession(exec: TmuxExec, target: string): Promise<boolean> {
+/**
+ * Is the named session currently alive on the server?
+ *
+ * Returns `false` (never throws) for every shape tmux uses to say "not here":
+ *   - `can't find session: …`  (target name doesn't exist at session level)
+ *   - `can't find window: …`   (tmux parsed name as `session.window`, no such window)
+ *   - `can't find pane: …`     (tmux parsed name as `session.window.pane`, no such pane)
+ *   - `no server running on …` / `error connecting to …` (empty/dead server)
+ *
+ * The three `can't find` shapes share a single source via `isSessionGoneStderr`;
+ * the no-server shapes share via `isNoServerStderr`. Broadening these is
+ * what made `exists()` return `false` (not throw) for names containing
+ * tmux-reserved characters — see QA P1-1.
+ *
+ * `label` is the user-facing identifier used in error messages (defaults to
+ * `target` for callers who haven't computed the label). Errors thrown
+ * from this function carry `label` as the session-name slot, not the tmux
+ * internal target encoding.
+ */
+export async function hasSession(
+  exec: TmuxExec,
+  target: string,
+  label: string = target,
+): Promise<boolean> {
   try {
-    const r = await exec.run(["has-session", "-t", target], { sessionName: target });
+    const r = await exec.run(["has-session", "-t", target], { sessionName: label });
     if (r.exit === 0) return true;
-    if (/can't find session:/i.test(r.stderr)) return false;
-    // "error connecting to /tmp/.../sock (No such file or directory)" is the
-    // empty-server form on some versions — semantically the same as "no session."
-    if (looksLikeNoServer(r.stderr)) return false;
-    const err = classifyTmuxFailure(target, ["tmux", "has-session", "-t", target], r);
+    if (isSessionGoneStderr(r.stderr)) return false;
+    if (isNoServerStderr(r.stderr)) return false;
+    const err = classifyTmuxFailure(label, ["tmux", "has-session", "-t", target], r);
     if (err) throw err;
     return false;
   } catch (err) {
-    if (err instanceof Error && looksLikeNoServer(err.message)) return false;
+    if (err instanceof BackendUnreachable) return false;
     throw err;
   }
-}
-
-/** True when tmux's stderr indicates the server is not running on the socket. */
-function looksLikeNoServer(text: string): boolean {
-  return /no server running on/i.test(text) || /error connecting to /i.test(text);
 }
 
 /**
  * Kill a session by target name. Idempotent — "session was already gone" or
  * "no server running" is treated as success.
  */
-export async function killSession(exec: TmuxExec, target: string): Promise<void> {
+export async function killSession(
+  exec: TmuxExec,
+  target: string,
+  label: string = target,
+): Promise<void> {
   try {
-    const r = await exec.run(["kill-session", "-t", target], { sessionName: target });
+    const r = await exec.run(["kill-session", "-t", target], { sessionName: label });
     if (r.exit === 0) return;
-    if (looksLikeNoServer(r.stderr)) return; // empty server == no session
-    const err = classifyTmuxFailure(target, ["tmux", "kill-session", "-t", target], r);
+    if (isNoServerStderr(r.stderr)) return; // empty server == no session
+    const err = classifyTmuxFailure(label, ["tmux", "kill-session", "-t", target], r);
     if (err instanceof SessionGone) return;
     if (err) throw err;
   } catch (err) {
-    if (err instanceof Error && looksLikeNoServer(err.message)) return;
+    if (err instanceof BackendUnreachable) return;
     throw err;
   }
 }
@@ -120,11 +147,11 @@ export async function listSessions(exec: TmuxExec, namespace: string): Promise<s
   try {
     r = await exec.run(["list-sessions", "-F", "#{session_name}"], { sessionName: namespace });
   } catch (err) {
-    if (err instanceof Error && looksLikeNoServer(err.message)) return [];
+    if (err instanceof BackendUnreachable) return [];
     throw err;
   }
   if (r.exit !== 0) {
-    if (looksLikeNoServer(r.stderr)) return [];
+    if (isNoServerStderr(r.stderr)) return [];
     if (r.stdout.trim() === "") return [];
     const err = classifyTmuxFailure(namespace, ["tmux", "list-sessions"], r);
     if (err) throw err;

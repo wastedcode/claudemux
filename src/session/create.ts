@@ -8,6 +8,7 @@ import { DEFAULT_NAMESPACE } from "./constants.js";
 import { sharedDefaultBackend } from "./default-backend.js";
 import { makeHandle } from "./handle.js";
 import { formatSessionLabel } from "./ref.js";
+import { validateNamePart } from "./validate.js";
 
 /**
  * Options for {@link create}. The substrate provides sensible defaults so
@@ -55,6 +56,8 @@ export interface CreateOptions {
  */
 export async function create(opts: CreateOptions): Promise<SessionHandle> {
   const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
+  validateNamePart("namespace", namespace);
+  validateNamePart("name", opts.name);
   const agent = opts.agent ?? defaultAgent;
   const backend = opts.backend ?? sharedDefaultBackend();
   const ref: SessionRef = { namespace, name: opts.name };
