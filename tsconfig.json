@@ -21,7 +21,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "noEmit": true
   },
   "include": ["src/**/*", "test/**/*", "examples/**/*", "bin/**/*"],
   "exclude": ["node_modules", "dist"]
