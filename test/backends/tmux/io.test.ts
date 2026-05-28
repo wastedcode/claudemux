@@ -59,7 +59,8 @@ describe("pasteText — multi-line, byte-perfect, no Enter auto-append", () => {
     // Cooked-mode sink: tmux's paste delivers \n as \r (terminal Enter shape);
     // the pty's icrnl line discipline turns the \r back into \n on cat's stdin.
     // That two-step round-trip is exactly what claude (readline-style) sees,
-    // and what the substrate's normalization decision (research §2) targets.
+    // and what the substrate's normalization decision targets
+    // (docs/decisions/0001-tmux-paste-mechanism.md).
     const { target, sinkPath } = await spawnSink("multi", "cooked");
     // Trailing \n submits the last line so cooked-mode flushes everything.
     await pasteText(exec, target, "first\r\nsecond\nthird\n");

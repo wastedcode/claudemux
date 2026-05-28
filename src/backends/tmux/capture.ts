@@ -5,7 +5,8 @@ import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./
  * Capture the named session's pane text.
  *
  * Always uses `capture-pane -p` (the live visible region — proven unaffected
- * by copy-mode and attached clients in pre-build research §9). Bottom-N
+ * by copy-mode and attached clients; see
+ * `docs/decisions/0003-capture-pane-invocation.md`). Bottom-N
  * slicing happens **in code** via `output.split('\n').slice(-N)`, NEVER
  * `capture-pane -S -N` — the latter returns `N + pane_height` lines, not
  * bottom-N (see `engineer/wiki/tmux-capture-pane-the-bottom-n-trap`).

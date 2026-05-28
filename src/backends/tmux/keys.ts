@@ -8,7 +8,8 @@ import { hasSession } from "./sessions.js";
  *
  * `-p` lets tmux emit bracketed-paste sequences if the receiver advertised
  * support — empirically verified byte-perfect end-to-end against a passive
- * sink on tmux 3.6 (pre-build research §1). Body line terminators normalize
+ * sink on tmux 3.6 (see `docs/decisions/0001-tmux-paste-mechanism.md`). Body
+ * line terminators normalize
  * to `\n` so claude (and other TUI agents that opt into bracketed paste)
  * see literal newlines inside the bracket, not stray `\r`s.
  *

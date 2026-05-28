@@ -5,7 +5,7 @@ name: claude ❯ glyph canary
 # opens (or comments on) a tracking issue so a human sees it within a
 # release cycle of upstream claude.
 #
-# Reference: research/findings.md §3.
+# Reference: docs/decisions/0002-claude-ready-marker-glyph.md
 
 on:
   schedule:

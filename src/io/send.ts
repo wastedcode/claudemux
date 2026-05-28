@@ -21,8 +21,9 @@ import { captureSendBaseline, writeSendBaseline } from "./baseline.js";
  * the send.
  *
  * @remarks
- * The two-call sequence (paste-then-Enter) is load-bearing per pre-build
- * research §1+2 — bracketed paste lets the receiver distinguish typed `\n`
+ * The two-call sequence (paste-then-Enter) is load-bearing per
+ * `docs/decisions/0001-tmux-paste-mechanism.md` — bracketed paste lets the
+ * receiver distinguish typed `\n`
  * (submit) from pasted `\n` (literal newline). Folding submission into the
  * paste body would re-introduce the per-line-submit failure mode.
  */
