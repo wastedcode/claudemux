@@ -3,8 +3,8 @@
  * session name in its message so a consumer logging an unknown failure
  * still has the context they need.
  *
- * No bare `Error` is ever thrown from the library. The eight classes here
- * are exhaustive for v0.0.1.
+ * No bare `Error` is ever thrown from the library. The classes here are
+ * exhaustive for v0.0.1.
  */
 
 /** Base class — consumers can `catch (e: ClaudemuxError)` for the union. */
@@ -147,8 +147,20 @@ export class InvalidSessionName extends ClaudemuxError {
 
 /**
  * Wrapper for an unexpected backend failure that isn't one of the typed
- * cases above (non-zero exit + unrecognized stderr). Carries the argv and
- * stderr so consumers can diagnose without a `console.log` in the library.
+ * cases above (non-zero exit + unrecognized stderr).
+ *
+ * @remarks
+ * The `.message` deliberately **excludes the backend argv** — the argv is
+ * pure backend vocabulary (the backend's own subcommand names) and leaking
+ * it into the user-facing message violates the substrate's "zero references
+ * to the backend in error messages" promise. The argv lives on `.argv` (and
+ * flows through `onBackendCommand`) for programmatic diagnosis; the
+ * human-readable message carries the exit code and the backend's own stderr
+ * text, which is the diagnostic value without the command vocabulary.
+ *
+ * This is the structural backstop behind the backend classifier's
+ * routine-case promotion: even a backend failure shape we haven't classified
+ * yet cannot leak the backend's command names into user-facing text.
  */
 export class BackendError extends ClaudemuxError {
   readonly argv: readonly string[];
@@ -157,7 +169,7 @@ export class BackendError extends ClaudemuxError {
 
   constructor(sessionName: string, argv: readonly string[], exitCode: number, stderr: string) {
     super(
-      `backend command failed (exit ${exitCode}): ${argv.join(" ")} — ${stderr.trim() || "<empty stderr>"}`,
+      `backend command failed (exit ${exitCode}): ${stderr.trim() || "<empty stderr>"}`,
       sessionName,
     );
     this.argv = argv;

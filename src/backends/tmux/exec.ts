@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { BackendError, BackendUnreachable, SessionGone } from "../../errors.js";
+import { BackendError, BackendUnreachable, SessionExists, SessionGone } from "../../errors.js";
 import { Emitter } from "../../util/emitter.js";
 import type { BackendEvent } from "../types.js";
 
@@ -30,6 +30,19 @@ const SESSION_GONE_PATTERNS = ["can't find session:", "can't find pane:", "can't
 export function isSessionGoneStderr(text: string): boolean {
   const lower = text.toLowerCase();
   return SESSION_GONE_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
+ * tmux stderr shape when `new-session -s <name>` races another process
+ * creating the same target. With the shared default socket (ADR 0006),
+ * concurrent `spawn`s of the same name are routine, and the TOCTOU window
+ * between `create()`'s exists-check and `backend.spawn()` means tmux —
+ * not the substrate's check — sometimes discovers the collision. The
+ * semantically-correct typed error is `SessionExists`, same as a check-time
+ * collision: the substrate refuses to silently adopt either way.
+ */
+export function isDuplicateSessionStderr(text: string): boolean {
+  return /duplicate session:/i.test(text);
 }
 
 /**
@@ -150,10 +163,14 @@ export class TmuxExec {
  * `sessionName` is the requested target (so the error carries the right
  * context even when tmux's stderr names something else).
  *
- * Order matters: `BackendUnreachable` (no server) > `SessionGone` (target
- * doesn't exist) > `BackendError` (unrecognized failure). A BackendError
- * leaks the raw tmux argv into its `.message`; promoting the routine
- * failure modes above it keeps argv out of user-visible error text.
+ * Order matters: `BackendUnreachable` (no server) > `SessionExists`
+ * (duplicate-session race) > `SessionGone` (target doesn't exist) >
+ * `BackendError` (unrecognized failure). The routine failure modes are
+ * promoted above `BackendError` so the substrate surfaces a clean typed
+ * error rather than the catch-all. As a structural backstop,
+ * `BackendError.message` itself does not embed the tmux argv (see
+ * `errors.ts`), so even an unclassified shape cannot leak the backend's
+ * vocabulary into user-facing text.
  */
 export function classifyTmuxFailure(
   sessionName: string,
@@ -169,6 +186,11 @@ export function classifyTmuxFailure(
       sessionName,
       new Error("no server running on the configured socket"),
     );
+  }
+  if (isDuplicateSessionStderr(result.stderr)) {
+    // A concurrent spawn won the race — same outcome as a check-time
+    // collision. The substrate never silently adopts.
+    return new SessionExists(sessionName);
   }
   if (isSessionGoneStderr(result.stderr)) {
     return new SessionGone(sessionName);

@@ -59,13 +59,24 @@ describe("typed errors", () => {
     expect(e.message).toContain("ENOENT");
   });
 
-  it("BackendError preserves argv + exit + stderr", () => {
+  it("BackendError preserves argv + exit + stderr on fields", () => {
     const e = new BackendError("s", ["tmux", "has-session", "-t", "s"], 1, "boom");
     expect(e.argv).toEqual(["tmux", "has-session", "-t", "s"]);
     expect(e.exitCode).toBe(1);
     expect(e.stderr).toBe("boom");
     expect(e.message).toContain("exit 1");
     expect(e.message).toContain("boom");
+  });
+
+  it("BackendError.message does NOT embed the backend argv (vocabulary guard)", () => {
+    // The argv is pure backend vocabulary; leaking it into the message
+    // violates the substrate's no-backend-in-errors promise. It lives on
+    // .argv for programmatic diagnosis; the message stays clean even when
+    // the argv begins with a backend command name.
+    const e = new BackendError("s", ["tmux", "capture-pane", "-p", "-t", "s"], 1, "weird failure");
+    expect(e.message.toLowerCase()).not.toContain("tmux");
+    expect(e.message.toLowerCase()).not.toContain("capture-pane");
+    expect(e.argv).toContain("tmux");
   });
 
   it("error class .name property is the class name (for instanceof-shape logging)", () => {
