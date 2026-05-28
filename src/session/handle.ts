@@ -24,12 +24,28 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
   const ref: SessionRef = { namespace: deps.namespace, name: deps.name };
   const mutex = new Mutex();
 
+  // The pane snapshot taken just before the most recent `send`. `wait` uses
+  // it to require the pane to *leave* this state before accepting idle —
+  // the transition-aware contract that stops `wait` from returning the
+  // previous turn's stale prompt. Consumed (cleared) by the next `wait`, so a
+  // bare `wait` with no preceding `send` arms only on observing a non-idle
+  // state. send/wait are mutex-gated, so this single slot can't race.
+  let lastSendBaseline: string | undefined;
+
   return {
     name: deps.name,
     namespace: deps.namespace,
-    send: (text) => mutex.run(() => sendOnce(deps.backend, ref, text)),
+    send: (text) =>
+      mutex.run(async () => {
+        lastSendBaseline = await deps.backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+        await sendOnce(deps.backend, ref, text);
+      }),
     wait: (opts?: ReadyOpts) =>
-      mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
+      mutex.run(() => {
+        const baseline = lastSendBaseline;
+        lastSendBaseline = undefined;
+        return waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize }, baseline);
+      }),
     state: () => mutex.run(() => readState(deps.backend, deps.agent, ref)),
     capture: (opts) => mutex.run(() => deps.backend.capture(ref, opts)),
     kill: () => mutex.run(() => deps.backend.kill(ref)),
