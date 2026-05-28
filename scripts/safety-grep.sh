@@ -28,6 +28,11 @@ for d in src test examples scripts; do
   if [ -d "$ROOT/$d" ]; then SCAN_DIRS+=("$ROOT/$d"); fi
 done
 
+# Exclusions: the safety-grep meta-test file contains banned patterns as
+# string literals (by design — they prove the script catches them). Skip
+# only that file by name so the rule and its tests don't chase each other.
+GREP_EXCLUDES=(--exclude=safety-grep.test.ts)
+
 # True when the line is a comment (or comment-prefix in a JSDoc/markdown
 # context). We use grep -v with this in a pipeline.
 is_comment_line() {
@@ -48,7 +53,7 @@ BANNED_PATTERNS=(
 )
 
 for pattern in "${BANNED_PATTERNS[@]}"; do
-  matches=$(grep -rEHn "$pattern" "${SCAN_DIRS[@]}" 2>/dev/null | grep -vE ':[[:space:]]*(//|\*|#)' || true)
+  matches=$(grep -rEHn "${GREP_EXCLUDES[@]}" "$pattern" "${SCAN_DIRS[@]}" 2>/dev/null | grep -vE ':[[:space:]]*(//|\*|#)' || true)
   if [ -n "$matches" ]; then
     echo "safety-grep: BANNED peer-process matcher (\"$pattern\"):" >&2
     echo "$matches" >&2
@@ -73,7 +78,7 @@ while IFS= read -r match; do
   echo "safety-grep: tmux invocation missing -f /dev/null at $file:$line_num" >&2
   echo "  $content" >&2
   violations=$((violations + 1))
-done < <(grep -rEHn '\btmux[[:space:]]+(-L|new-session|kill-session|has-session|list-sessions|capture-pane|send-keys|set-option|set-window-option|set-environment|display-message|paste-buffer|load-buffer|respawn-pane|kill-server|start-server)' "${SCAN_DIRS[@]}" 2>/dev/null)
+done < <(grep -rEHn "${GREP_EXCLUDES[@]}" '\btmux[[:space:]]+(-L|new-session|kill-session|has-session|list-sessions|capture-pane|send-keys|set-option|set-window-option|set-environment|display-message|paste-buffer|load-buffer|respawn-pane|kill-server|start-server)' "${SCAN_DIRS[@]}" 2>/dev/null)
 
 if [ "$violations" -gt 0 ]; then
   echo "safety-grep: $violations violation(s) found" >&2

@@ -21,7 +21,11 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "claudemux": ["./src/index.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*", "examples/**/*", "bin/**/*"],
   "exclude": ["node_modules", "dist"]
