@@ -3,7 +3,8 @@
 # Two job lanes:
 #   - `gates`: lint, typecheck, public-surface + safety greps, npm-pack
 #     assertion. Runs on every push/PR — cheap and structural.
-#   - `matrix`: full test suite against tmux 3.0 / 3.2 / 3.4 / 3.5a × {ubuntu, macos}.
+#   - `matrix`: full test suite against tmux 3.2 / 3.4 / 3.5a × {ubuntu, macos}.
+#     Floor is 3.2 — `new-session -e` (used to set per-session env) is 3.2+.
 #     Tmux is installed from source per cell (apt's default tmux doesn't
 #     cover the version matrix); the build is cached so re-runs are fast.
 
@@ -45,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        tmux: ["3.0a", "3.2a", "3.4", "3.5a"]
+        tmux: ["3.2a", "3.4", "3.5a"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

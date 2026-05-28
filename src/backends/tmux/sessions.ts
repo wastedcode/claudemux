@@ -1,4 +1,5 @@
 import { BackendUnreachable, SessionGone } from "../../errors.js";
+import { PANE_HEIGHT } from "../../session/constants.js";
 import { type TmuxExec, classifyTmuxFailure, isSessionGoneStderr } from "./exec.js";
 import { serverOptionsArgv } from "./options.js";
 
@@ -16,12 +17,16 @@ export function targetOf(namespace: string, name: string): string {
 }
 
 /**
- * Create a new tmux session running `cmd` + `argv` in `cwd`. Applies the
- * substrate's five per-session options before the agent process starts.
+ * Create a new tmux session running `cmd` + `argv` in `cwd`, with the
+ * substrate's server-global options set in the same invocation so they
+ * land before the agent's pane is allocated.
  *
- * Uses the two-step holder-pane / `respawn-pane -k` startup so the options
- * land before the agent's pane is allocated — `history-limit` is allocated
- * at pane creation, and `set-environment` only affects future spawns.
+ * Per-session environment (including `LC_ALL=C.UTF-8` for unicode glyph
+ * stability — a substrate concern, not an agent one) rides on `new-session
+ * -e KEY=VAL` pairs. `-e` on `new-session` is tmux ≥3.2; that sets the
+ * substrate's supported floor (see README §Compatibility / details.md
+ * §Quality). `set-environment` after `new-session` is not an option — it
+ * doesn't affect the already-spawned pane process.
  */
 export async function newSession(
   exec: TmuxExec,
@@ -39,10 +44,11 @@ export async function newSession(
   const target = targetOf(o.namespace, o.name);
   const label = o.label ?? target;
 
-  // Build new-session argv. Env vars (caller-supplied) ride on `-e KEY=VAL`
-  // pairs at new-session time — `set-environment` after new-session would
-  // not affect the already-spawned pane process.
-  const envFlags = o.env ? Object.entries(o.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]) : [];
+  // LC_ALL=C.UTF-8 is the substrate's default locale; `o.env` may override or
+  // augment it. Merging into one object dedupes the key, so the agent passing
+  // `env: { LC_ALL }` (claude does) doesn't produce a duplicate `-e` flag.
+  const env: Record<string, string> = { LC_ALL: "C.UTF-8", ...o.env };
+  const envFlags = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   const newSessionCmd = [
     "new-session",
     "-d",
@@ -51,9 +57,8 @@ export async function newSession(
     "-x",
     "120",
     "-y",
-    "40",
-    "-e",
-    "LC_ALL=C.UTF-8",
+    // Pane height = the classifier's scan cap; one source so they can't drift.
+    String(PANE_HEIGHT),
     ...envFlags,
     "-c",
     o.cwd,

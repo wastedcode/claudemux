@@ -3,6 +3,15 @@
   "version": "0.0.1",
   "description": "Drive long-lived Claude Code sessions from Node without writing tmux glue. await session.wait() actually returns when the agent is done.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wastedcode/claudemux.git"
+  },
+  "homepage": "https://github.com/wastedcode/claudemux#readme",
+  "bugs": {
+    "url": "https://github.com/wastedcode/claudemux/issues"
+  },
+  "keywords": ["claude", "claude-code", "tmux", "agent", "cli", "substrate", "automation"],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

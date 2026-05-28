@@ -13,12 +13,18 @@ describe("resolveSocket — precedence + trim consistency", () => {
 
   beforeEach(() => {
     savedEnv = process.env.CLAUDEMUX_SOCKET;
-    process.env.CLAUDEMUX_SOCKET = undefined;
+    // Must truly unset (not = undefined, which Node stringifies to "undefined").
+    // biome-ignore lint/performance/noDelete: env unset in a test; perf irrelevant.
     delete process.env.CLAUDEMUX_SOCKET;
   });
 
   afterEach(() => {
-    process.env.CLAUDEMUX_SOCKET = savedEnv;
+    if (savedEnv === undefined) {
+      // biome-ignore lint/performance/noDelete: restore the unset state.
+      delete process.env.CLAUDEMUX_SOCKET;
+    } else {
+      process.env.CLAUDEMUX_SOCKET = savedEnv;
+    }
   });
 
   it("default when no flag and no env", () => {

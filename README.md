@@ -131,12 +131,14 @@ Read the codebase top-down and the architecture is the file layout. There is no 
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| tmux 3.0a | ✓ | ✓ | — |
 | tmux 3.2a | ✓ | ✓ | — |
 | tmux 3.4 | ✓ | ✓ | — |
 | tmux 3.5a | ✓ | ✓ | — |
 
-CI runs the full integration suite on every cell of the matrix. Windows-native support is not on the roadmap; WSL is community-contributable, undocumented by us.
+**Minimum tmux is 3.2** — claudemux sets per-session environment via
+`new-session -e`, which tmux added in 3.2. CI runs the full integration suite
+on every cell of the matrix. Windows-native support is not on the roadmap; WSL
+is community-contributable, undocumented by us.
 
 `claude` is the only supported agent in v0.0.1. The architecture allows additional agents (`codex`, etc.) via `AgentDef`; real demand will pull alternatives in.
 
