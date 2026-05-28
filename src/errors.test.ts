@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BackendError,
+  BackendUnreachable,
   ClaudemuxError,
   DialogStuck,
   LoginRequired,
@@ -8,7 +9,6 @@ import {
   ReplTimeout,
   SessionExists,
   SessionGone,
-  TmuxUnreachable,
 } from "./errors.js";
 
 describe("typed errors", () => {
@@ -20,7 +20,7 @@ describe("typed errors", () => {
       { err: new LoginRequired("a"), name: "a" },
       { err: new PaneDead("b", 9), name: "b" },
       { err: new SessionGone("c"), name: "c" },
-      { err: new TmuxUnreachable("d"), name: "d" },
+      { err: new BackendUnreachable("d"), name: "d" },
       {
         err: new BackendError("e", ["tmux", "has-session"], 1, "can't find session: e"),
         name: "e",
@@ -52,9 +52,9 @@ describe("typed errors", () => {
     expect(e.message).toContain("signal 9");
   });
 
-  it("TmuxUnreachable optionally wraps an underlying cause", () => {
+  it("BackendUnreachable optionally wraps an underlying cause", () => {
     const cause = new Error("ENOENT");
-    const e = new TmuxUnreachable("s", cause);
+    const e = new BackendUnreachable("s", cause);
     expect(e.underlying).toBe(cause);
     expect(e.message).toContain("ENOENT");
   });

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { BackendError, SessionGone, TmuxUnreachable } from "../../errors.js";
+import { BackendError, BackendUnreachable, SessionGone } from "../../errors.js";
 import { Emitter } from "../../util/emitter.js";
 import type { BackendEvent } from "../types.js";
 
@@ -44,7 +44,7 @@ export class TmuxExec {
    * A wrapper that reads only one stream misses one case (see
    * `engineer/wiki/tmux-pane-death-detection`).
    *
-   * @throws `TmuxUnreachable` on spawn failure (ENOENT, EPIPE, "no server
+   * @throws `BackendUnreachable` on spawn failure (ENOENT, EPIPE, "no server
    *   running" on a connect-only operation, etc.). The session-name field
    *   on the typed error is the *requested* session (passed by the caller).
    */
@@ -88,13 +88,13 @@ export class TmuxExec {
           stderr,
         });
         if (spawnErr) {
-          reject(new TmuxUnreachable(sessionName, spawnErr));
+          reject(new BackendUnreachable(sessionName, spawnErr));
           return;
         }
         // "no server running" — tmux is on PATH but its server is down on
-        // a connect-only operation. Promote to TmuxUnreachable.
+        // a connect-only operation. Promote to BackendUnreachable.
         if (exit !== 0 && /no server running on/i.test(stderr)) {
-          reject(new TmuxUnreachable(sessionName, new Error(stderr.trim())));
+          reject(new BackendUnreachable(sessionName, new Error(stderr.trim())));
           return;
         }
         resolve({ exit, stdout, stderr, durationMs });

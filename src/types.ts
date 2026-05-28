@@ -2,8 +2,8 @@
  * Public types for the claudemux substrate. Re-exported from {@link ./index}.
  *
  * The library is backend-neutral by design: nothing in this file mentions
- * tmux, PTYs, or any other concrete implementation. The {@link Backend} seam
- * lives in `src/backends/types.ts` and is **not** part of the public surface.
+ * any concrete backend. The internal `Backend` seam lives in
+ * `src/backends/types.ts` and is **not** part of the public surface.
  */
 
 /**

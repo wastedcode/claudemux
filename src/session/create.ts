@@ -1,12 +1,11 @@
 import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import { tmuxBackend } from "../backends/tmux/index.js";
 import { targetOf } from "../backends/tmux/sessions.js";
-import { mintSocket } from "../backends/tmux/socket.js";
 import type { Backend } from "../backends/types.js";
 import { SessionExists } from "../errors.js";
 import type { SessionHandle } from "../types.js";
 import { bootSession } from "./boot.js";
+import { sharedDefaultBackend } from "./default-backend.js";
 import { makeHandle } from "./handle.js";
 
 /**
@@ -56,7 +55,7 @@ export interface CreateOptions {
 export async function create(opts: CreateOptions): Promise<SessionHandle> {
   const namespace = opts.namespace ?? "claudemux";
   const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? defaultBackend();
+  const backend = opts.backend ?? sharedDefaultBackend();
   const target = targetOf(namespace, opts.name);
 
   // Exists-check first. Never silently adopt an existing session — that is
@@ -91,12 +90,4 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
   }
 
   return makeHandle({ backend, agent, namespace, name: opts.name });
-}
-
-let _defaultBackend: Backend | null = null;
-function defaultBackend(): Backend {
-  if (_defaultBackend === null) {
-    _defaultBackend = tmuxBackend({ socket: mintSocket() });
-  }
-  return _defaultBackend;
 }

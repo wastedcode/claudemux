@@ -11,7 +11,7 @@ import {
   newSession,
   targetOf,
 } from "../../../src/backends/tmux/sessions.js";
-import { SessionGone, TmuxUnreachable } from "../../../src/errors.js";
+import { BackendUnreachable, SessionGone } from "../../../src/errors.js";
 import { Harness } from "../../harness/index.js";
 
 let h: Harness;
@@ -40,14 +40,14 @@ describe("TmuxExec — discipline + spawn-time errors", () => {
     expect(argv.slice(0, 5)).toEqual(["tmux", "-L", h.socket, "-f", "/dev/null"]);
   });
 
-  it("a non-existent tmux binary surfaces TmuxUnreachable", async () => {
+  it("a non-existent tmux binary surfaces BackendUnreachable", async () => {
     // Override PATH so `tmux` resolves to nothing.
     const originalPath = process.env.PATH;
     process.env.PATH = "/nowhere";
     const isolatedExec = new TmuxExec("never-used");
     try {
       await expect(isolatedExec.run(["list-sessions"], { sessionName: "x" })).rejects.toThrow(
-        TmuxUnreachable,
+        BackendUnreachable,
       );
     } finally {
       process.env.PATH = originalPath;

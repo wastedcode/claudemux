@@ -98,11 +98,11 @@ export class SessionGone extends ClaudemuxError {
 }
 
 /**
- * Thrown when the backend itself is unreachable — the tmux server failed
- * to spawn, the socket is missing, or `no server running` was reported on
- * a connection attempt.
+ * Thrown when the underlying backend (the agent's I/O substrate) is
+ * unreachable — the backend process failed to spawn, its socket is
+ * missing, or its server was not running on the requested connection.
  */
-export class TmuxUnreachable extends ClaudemuxError {
+export class BackendUnreachable extends ClaudemuxError {
   /** The underlying spawn / connection error, if available. */
   readonly underlying?: Error;
 
