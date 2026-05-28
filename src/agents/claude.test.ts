@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { claude } from "./claude.js";
 
@@ -128,28 +125,23 @@ describe("claude.boot.isReady — empty-input-box on real 2.1.153 panes", () => 
   });
 });
 
-describe("permission-prompts fixture sync + classification", () => {
-  it("runtime fixture mirrors the research fixture (scenarios identical)", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const repoRoot = join(here, "..", "..");
-    const runtime = JSON.parse(
-      readFileSync(join(repoRoot, "src/agents/permission-prompts.json"), "utf8"),
-    ) as { scenarios: ReadonlyArray<unknown> };
-    const research = JSON.parse(
-      readFileSync(
-        join(repoRoot, "research/fixtures/permission-prompt-classifier-fixture.json"),
-        "utf8",
-      ),
-    ) as { scenarios: ReadonlyArray<unknown> };
-    expect(runtime.scenarios).toEqual(research.scenarios);
-    expect(research.scenarios.length).toBeGreaterThan(0);
+describe("permission-prompt is reserved, NOT emitted in v0.0.1 (ADR 0010 — detection+handling are v0.1)", () => {
+  it("permissionPrompt returns false for everything — including the real 2.1.153 prompt", () => {
+    // Per ADR 0010, detection and handling defer to v0.1 as one unit (a
+    // `respond()` primitive lands with detection). v0.0.1 ships the matcher
+    // empty: a prompt classifies as `unknown` (NOT idle — property #2 floor
+    // holds), and an interactive default-mode session that hits one runs out
+    // its wait() budget → ReplTimeout. Documented fix: a non-interactive
+    // permission mode (README §5). The enumerated shapes are kept in
+    // research/fixtures/ as the v0.1 starting point.
+    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(false);
+    expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(false);
   });
 
-  it("permissionPrompt classifies the REAL 2.1.153 tool-approval prompt", () => {
-    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(true);
-    // And an arbitrary "Do you want to <verb>" header (edit / bash / etc.).
-    expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(true);
-    expect(claude.rules.permissionPrompt("the answer is 42\n❯ ")).toBe(false);
+  it("a permission prompt is therefore NOT idle (never mistaken for a completed turn)", () => {
+    // The floor that DOES hold in v0.0.1: a prompt is not the empty input box.
+    expect(claude.boot.isReady(PERMISSION_PROMPT_2_1_153)).toBe(false);
+    expect(claude.rules.idle(PERMISSION_PROMPT_2_1_153)).toBe(false);
   });
 });
 

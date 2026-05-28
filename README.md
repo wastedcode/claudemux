@@ -1,11 +1,11 @@
 # claudemux
 
-> Drive long-lived Claude Code sessions from Node.
+> Run and coordinate multiple real-login Claude Code sessions on your box, from Node.
 > `await session.wait()` actually returns when the agent is done.
 
 ## 1. TL;DR
 
-You have `child_process.spawn('claude', [...])` + ad-hoc ANSI regex + `sleep(5)` somewhere. It works on your laptop, breaks in CI, hangs on the first-run dialog, and silently stalls on permission prompts. claudemux retires that layer once.
+You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or several), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
 
 ```ts
 import { create } from "claudemux";
@@ -17,6 +17,10 @@ const text = await session.capture();
 ```
 
 `create()` boots the agent, dismisses the first-run dialogs, and returns when the REPL is genuinely ready — not after a `sleep`. `wait()` blocks until the agent is in an actionable state (idle, awaiting a permission decision, or showing a dialog). The five-line example above is the whole substrate.
+
+**What this is for:** driving the *consumer-login* `claude` CLI (the one you set up with `claude login`) on a box you control — one session, or many coordinating, the way an orchestrator might run several claude sessions that talk to each other. It inherits your box's claude config (auth, permission mode, model, MCP) and passes claude's own flags through; it owns no configuration of its own (one exception: workspace trust, §4).
+
+**What this is *not* for:** deployed or anonymous automation that drives claude via injected credentials or API keys — CI fleets, hosted services. Consumer-login claude can't run there (ephemeral boxes can't interactively log in, and it's against Anthropic's terms); that's what the Claude Agent SDK + API are for. claudemux makes the on-a-box, real-login case reliable.
 
 ## 2. Install
 
@@ -55,7 +59,7 @@ The full verb set:
 
 Every command accepts `--namespace <name>` (default `claudemux`) so two consumers on one machine don't collide.
 
-All `claudemux` invocations from the same user share one rendezvous socket (the default `claudemux` socket file, owned per-UID by the OS). That's how `spawn` in one process is visible to `send`/`wait`/`capture` in subsequent processes. To opt into an isolated socket (parallel CI, debugging), pass `--socket <name>` or set `CLAUDEMUX_SOCKET=<name>` in the environment.
+All `claudemux` invocations from the same user share one rendezvous socket (the default `claudemux` socket file, owned per-UID by the OS). That's how `spawn` in one process is visible to `send`/`wait`/`capture` in subsequent processes. To opt into an isolated socket (a second independent orchestrator on the same box, or debugging), pass `--socket <name>` or set `CLAUDEMUX_SOCKET=<name>` in the environment.
 
 ## 4. Library usage
 
@@ -111,7 +115,7 @@ await create({ name: "job", cwd, trustWorkspace: true });   // library
 claudemux spawn job --cwd ./repo --trust-workspace          # CLI
 ```
 
-⚠️ Opting in writes a **persistent, per-folder** trust flag to the agent's config (`~/.claude.json`) — it is *not* session-scoped and applies to every future run in that path, including your own interactive sessions. For untrusted-fork workloads (PR bots, CI on third-party code), use an **ephemeral unique checkout path or an ephemeral `HOME` per run** — trust is sticky per `(HOME × path)`, so a reused path a prior run trusted is trusted silently.
+⚠️ Opting in writes a **persistent, per-folder** trust flag to the agent's config (`~/.claude.json`) — it is *not* session-scoped and applies to every future run in that path, including your own interactive sessions. If you point a session at code you don't fully trust (a repo you just cloned to look at), use an **ephemeral unique path or an ephemeral `HOME` per run** — trust is sticky per `(HOME × path)`, so a reused path a prior run trusted is trusted silently.
 
 ## 5. State model
 
@@ -121,11 +125,13 @@ claudemux spawn job --cwd ./repo --trust-workspace          # CLI
 |---|---|
 | `working` | The agent is producing output (streaming, tool calls, spinners). |
 | `idle` | The REPL is ready for input — the input box is showing the ready marker and the pane has been stable briefly. |
-| `permission-prompt` | The agent is waiting on a permission decision. |
+| `permission-prompt` | The agent is waiting on a permission decision. **Reserved for v0.1 — not emitted in v0.0.1 (see below).** |
 | `dialog` | The agent is showing a system dialog (theme picker, trust prompt, etc.). |
 | `unknown` | No predicate fired; consumers must not treat as idle. |
 
 `wait()` returns as soon as state ∈ `{idle, permission-prompt, dialog}` — those are the three "actionable" states. `unknown` is a contractual "the substrate doesn't recognize what's on the pane" return value; treating it as idle would race against a turn still in flight. Default `wait()` timeout is 5 minutes; pass `{ timeoutMs }` to override.
+
+**Permission prompts in v0.0.1.** claudemux owns no configuration — you set claude's permission mode (see §1). v0.0.1 therefore does **not** detect mid-turn tool-approval prompts: the `permission-prompt` state exists in the type but is never emitted, and a prompt classifies as `unknown` (never as `idle` — so it is never mistaken for a finished turn). The consequence: a session left in interactive `default` mode that hits a prompt has no one to answer it, so `wait()` runs out its budget and throws `ReplTimeout`. **Run unattended sessions in a non-interactive permission mode** — e.g. spawn claude with `--permission-mode acceptEdits` (or `bypassPermissions`), or set it in `~/.claude`. v0.1 adds prompt detection together with a `respond()` primitive so you can answer prompts programmatically (and starts emitting the reserved `permission-prompt` state — a non-breaking change for consumers already handling the documented return type).
 
 ## 6. Architecture
 

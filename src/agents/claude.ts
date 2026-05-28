@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ClassifierRules } from "../state/types.js";
 import type { AgentDef, BootDialog } from "./types.js";
 
@@ -16,45 +13,30 @@ import type { AgentDef, BootDialog } from "./types.js";
  */
 
 /**
- * Pane-text substring matchers the classifier uses to detect Claude Code
- * permission prompts. Loaded at module init from the in-source fixture
- * (kept in sync with `research/fixtures/permission-prompt-classifier-fixture.json`
- * by the substrate maintenance discipline).
+ * Pane-text substrings that classify a Claude Code permission prompt.
  *
- * With `scenarios: []` the predicate returns `false` for everything — that
- * IS the design at v0.0.1 ship per the founder-ratified (C)+(A) path. The
- * classifier dispatches to `unknown` as the safe failure mode (consumers
- * are documented to not treat `unknown` as idle); the founder populates
- * scenarios at product-acceptance against authenticated claude.
+ * **Empty by design for v0.0.1** — per [[decisions/0010-claudemux-owns-no-config]]
+ * permission-prompt *detection and handling defer to v0.1 as one unit*. The
+ * `permission-prompt` state is a reserved (forward-compat) member of the
+ * public `wait()`/`state()` return type that v0.0.1 never emits; v0.1 starts
+ * emitting it (non-breaking) together with a `respond()` primitive that can
+ * actually answer the prompt. Emitting detection without `respond()` would
+ * be a half-feature: the end state is identical either way — for unattended
+ * use you set a non-interactive permission mode yourself.
+ *
+ * With no substrings the `permissionPrompt` rule returns `false`, so a prompt
+ * classifies as `unknown` (never `idle` — it is never mistaken for a finished
+ * turn). A session left in interactive `default` mode that hits a prompt has
+ * nothing to answer it, so `wait()` elapses its budget and throws
+ * `ReplTimeout`; the documented fix is to run a non-interactive permission
+ * mode (claude `--permission-mode bypassPermissions`/`acceptEdits` via
+ * `extraArgs`, or `~/.claude` settings) — see README §5.
+ *
+ * The enumerated prompt shapes against authenticated claude live in
+ * `research/fixtures/permission-prompt-classifier-fixture.json` (e.g. the
+ * 2.1.153 header `"Do you want to "`) — kept as the v0.1 starting point.
  */
-function loadPermissionPromptScenarios(): readonly string[] {
-  // The fixture lives in dist/agents/ next to this file when published; we
-  // resolve via import.meta.url so the path works in both source (src/) and
-  // published (dist/) layouts.
-  const here = dirname(fileURLToPath(import.meta.url));
-  const path = join(here, "permission-prompts.json");
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    // If the fixture is missing (e.g. tests running from rootDir mismatch),
-    // treat as empty rather than crashing module init. The classifier still
-    // dispatches to `unknown` as the safe failure mode.
-    return [];
-  }
-  const parsed = JSON.parse(raw) as {
-    scenarios?: ReadonlyArray<{ matchSubstring?: string }>;
-  };
-  const subs: string[] = [];
-  for (const s of parsed.scenarios ?? []) {
-    if (typeof s?.matchSubstring === "string" && s.matchSubstring.length > 0) {
-      subs.push(s.matchSubstring);
-    }
-  }
-  return subs;
-}
-
-const PERMISSION_PROMPT_SUBSTRINGS = loadPermissionPromptScenarios();
+const PERMISSION_PROMPT_SUBSTRINGS: readonly string[] = [];
 
 const dialog: BootDialog[] = [
   {

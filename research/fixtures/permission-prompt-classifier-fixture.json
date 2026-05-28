@@ -2,7 +2,7 @@
   "purpose": "This fixture enumerates the pane-text patterns that claudemux's classifier uses to detect Claude Code permission prompts. It is **not** a guide for bypassing Claude Code's permission system. The flags referenced here are public CLI flags; this file documents their *effects on terminal output* for classifier accuracy.",
   "claudeVersion": "2.1.153",
   "lastObservedAt": "2026-05-28",
-  "_status": "enumerated at product-acceptance against authenticated claude 2.1.153 (default permission mode). The default tool-approval prompt header is the stable signal: `Do you want to <verb> <target>?` followed by `❯ 1. Yes / 2. Yes, allow all… / 3. No`. The `matchSubstring` field mirrored into src/agents/permission-prompts.json is `\"Do you want to \"`. Additional shapes (Bash/WebFetch/MCP, plan-mode) accumulate here as observed; the auth-gated replay test re-triggers each when run with creds.",
+  "_status": "enumerated at product-acceptance against authenticated claude 2.1.153 (default permission mode). The default tool-approval prompt header is the stable signal: `Do you want to <verb> <target>?` followed by `❯ 1. Yes / 2. Yes, allow all… / 3. No`. The `matchSubstring` field (`\"Do you want to \"`) is the v0.1 classifier's starting matcher — v0.0.1 does NOT wire it into the classifier (permission-prompt detection + handling defer to v0.1 as one unit per ADR 0010; the matcher in src/agents/claude.ts is intentionally empty). Additional shapes (Bash/WebFetch/MCP, plan-mode) accumulate here as observed; the auth-gated replay test (permission-prompts.test.ts) re-triggers each when run with creds and is wired into CI in v0.1.",
   "scenarios": [
     {
       "id": "tool-permission-default",
