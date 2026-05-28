@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **State classifier** with five values — `working`, `idle`, `permission-prompt`,
   `dialog`, `unknown`. Scans only the bottom-N pane lines so scrollback
   false-positives are impossible by construction.
-- **Eight typed errors** — `SessionExists`, `DialogStuck`, `ReplTimeout`,
-  `LoginRequired`, `PaneDead`, `SessionGone`, `BackendUnreachable`,
-  `BackendError` — every message carries the session identifier.
+- **Ten typed errors** — `SessionExists`, `DialogStuck`, `ReplTimeout`,
+  `LoginRequired`, `WorkspaceUntrusted`, `PaneDead`, `SessionGone`,
+  `BackendUnreachable`, `InvalidSessionName`, `BackendError` — each extends
+  `ClaudemuxError` with an actionable, backend-neutral message (the backend's
+  vocabulary never leaks into a public error; grep-enforced in CI).
 - **Per-session mutex** on `send`/`wait`/`state`/`capture`/`kill`. Concurrent
   consumer calls cannot interleave bytes.
 - **`onBackendCommand`** — the single observability primitive: one event per
@@ -37,12 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- Permission-prompt fixture ships with `scenarios: []`. Populating the
-  enumerated matchers is gated on authenticated-claude observability
-  (see `research/fixtures/permission-prompt-classifier-fixture.json`).
-  Until then, the classifier dispatches a permission prompt to `unknown` —
-  the contractual "no predicate fired" return, which consumers must not
-  treat as idle.
+- **Permission-prompt detection and handling are deferred to v0.1** (per
+  ADR 0010). `permission-prompt` is a reserved member of the public `State`
+  type that v0.0.1 does not emit: a tool-approval prompt classifies as
+  `unknown` (never `idle`), so an interactive `default`-mode session that hits
+  one elapses to `ReplTimeout`. Run unattended sessions in a non-interactive
+  permission mode — see README §5. The enumerated prompt shapes are kept in
+  `research/fixtures/` (not shipped) as the v0.1 starting point.
 - Post-auth dialogs (workspace-trust, post-update banner) are anticipated
   from `claude --help`; they're matched but their advancement is verified
   at product-acceptance against authenticated claude.

@@ -92,14 +92,15 @@ Typed errors — all extend `ClaudemuxError`:
 
 ```ts
 import {
-  SessionExists,    // create() collision; never silently adopts
-  LoginRequired,    // claude isn't authenticated; run `claude` interactively first
-  DialogStuck,      // a known dialog matched but didn't advance after the response
-  ReplTimeout,      // boot or wait budget elapsed before the state settled
-  PaneDead,         // the pane's process died (with the signal)
-  SessionGone,      // the session vanished from the backend
-  BackendUnreachable,
-  BackendError,
+  SessionExists,      // create() collision; never silently adopts
+  LoginRequired,      // claude isn't authenticated; run `claude` interactively first
+  DialogStuck,        // a known dialog matched but didn't advance after the response
+  ReplTimeout,        // boot or wait budget elapsed before the state settled
+  PaneDead,           // the pane's process died (with the signal)
+  SessionGone,        // the session vanished from the backend
+  InvalidSessionName, // name was empty, too long, or had illegal characters
+  BackendUnreachable, // the backend isn't installed / not running / timed out
+  BackendError,       // the backend command failed (message scrubbed of its argv)
   WorkspaceUntrusted, // cwd isn't trusted and trustWorkspace wasn't set (see below)
 } from "claudemux";
 ```

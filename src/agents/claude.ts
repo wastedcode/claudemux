@@ -16,25 +16,14 @@ import type { AgentDef, BootDialog } from "./types.js";
  * Pane-text substrings that classify a Claude Code permission prompt.
  *
  * **Empty by design for v0.0.1** — per [[decisions/0010-claudemux-owns-no-config]]
- * permission-prompt *detection and handling defer to v0.1 as one unit*. The
- * `permission-prompt` state is a reserved (forward-compat) member of the
- * public `wait()`/`state()` return type that v0.0.1 never emits; v0.1 starts
- * emitting it (non-breaking) together with a `respond()` primitive that can
- * actually answer the prompt. Emitting detection without `respond()` would
- * be a half-feature: the end state is identical either way — for unattended
- * use you set a non-interactive permission mode yourself.
- *
- * With no substrings the `permissionPrompt` rule returns `false`, so a prompt
- * classifies as `unknown` (never `idle` — it is never mistaken for a finished
- * turn). A session left in interactive `default` mode that hits a prompt has
- * nothing to answer it, so `wait()` elapses its budget and throws
- * `ReplTimeout`; the documented fix is to run a non-interactive permission
- * mode (claude `--permission-mode bypassPermissions`/`acceptEdits` via
- * `extraArgs`, or `~/.claude` settings) — see README §5.
- *
- * The enumerated prompt shapes against authenticated claude live in
- * `research/fixtures/permission-prompt-classifier-fixture.json` (e.g. the
- * 2.1.153 header `"Do you want to "`) — kept as the v0.1 starting point.
+ * permission-prompt detection and handling defer to v0.1 as one unit. With no
+ * substrings the `permissionPrompt` rule returns `false`, so a prompt
+ * classifies as `unknown`, never `idle`. `permission-prompt` stays a reserved
+ * member of the public `State` type; v0.1 begins emitting it (non-breaking)
+ * once this const is populated, paired with a `respond()` primitive to answer
+ * the prompt. The enumerated shapes (the v0.1 starting point) live in
+ * `research/fixtures/permission-prompt-classifier-fixture.json`; the v0.0.1
+ * consequence and the non-interactive-mode workaround are documented in README §5.
  */
 const PERMISSION_PROMPT_SUBSTRINGS: readonly string[] = [];
 
