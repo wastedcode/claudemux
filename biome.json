@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
   "organizeImports": { "enabled": true },
   "files": {
-    "ignore": ["dist/**", "node_modules/**", "research/**", "brain/**", ".github/**"]
+    "ignore": ["dist/**", "node_modules/**", "brain/**", ".github/**"]
   },
   "linter": {
     "enabled": true,

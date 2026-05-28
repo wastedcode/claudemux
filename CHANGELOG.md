@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unknown` (never `idle`), so an interactive `default`-mode session that hits
   one elapses to `ReplTimeout`. Run unattended sessions in a non-interactive
   permission mode — see README §5. The enumerated prompt shapes are kept in
-  `research/fixtures/` (not shipped) as the v0.1 starting point.
+  `test/fixtures/` (not shipped) as the v0.1 starting point.
 - Post-auth dialogs (workspace-trust, post-update banner) are anticipated
   from `claude --help`; they're matched but their advancement is verified
   at product-acceptance against authenticated claude.

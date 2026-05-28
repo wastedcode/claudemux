@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # assert-npm-pack — verify the published tarball contents exactly match
-# the allow-list. A leak of research/, brain/, or any test fixture into the
+# the allow-list. A leak of brain/, or any test fixture into the
 # published artifact would expose unintended internal material to consumers.
 #
 # Allow-list (lexicographically sorted):

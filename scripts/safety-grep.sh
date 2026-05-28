@@ -12,8 +12,7 @@
 #      `-L <socket>` does not prevent the read. See
 #      engineer/wiki/tmux-private-server-bootstrap.
 #
-# Scans src/ test/ examples/ scripts/. Allows research/, brain/, node_modules/,
-# dist/ (research/ probes pre-date the rule and are read-only history).
+# Scans src/ test/ examples/ scripts/. Allows brain/, node_modules/, dist/.
 #
 # Comment-only lines (TSDoc, // ..., # ...) are skipped — those are
 # documentation OF the rule, not violations.
