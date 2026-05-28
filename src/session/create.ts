@@ -1,0 +1,102 @@
+import { claude as defaultAgent } from "../agents/claude.js";
+import type { AgentDef } from "../agents/types.js";
+import { tmuxBackend } from "../backends/tmux/index.js";
+import { targetOf } from "../backends/tmux/sessions.js";
+import { mintSocket } from "../backends/tmux/socket.js";
+import type { Backend } from "../backends/types.js";
+import { SessionExists } from "../errors.js";
+import type { SessionHandle } from "../types.js";
+import { bootSession } from "./boot.js";
+import { makeHandle } from "./handle.js";
+
+/**
+ * Options for {@link create}. The substrate provides sensible defaults so
+ * the canonical call is `create({ name, cwd })`.
+ */
+export interface CreateOptions {
+  /** Session name within the namespace. */
+  name: string;
+  /** Working directory the agent runs in. */
+  cwd: string;
+  /** Namespace prefix (default: `"claudemux"`). Lets two consumers coexist. */
+  namespace?: string;
+  /** Agent definition (default: claude). */
+  agent?: AgentDef;
+  /** Backend instance (default: tmux on a fresh shared socket per process). */
+  backend?: Backend;
+  /** Extra args passed to the agent's argv. */
+  extraArgs?: string[];
+  /** Override env passed to the agent process. */
+  env?: Record<string, string>;
+  /** Boot timeout in ms (default 60_000). */
+  bootTimeoutMs?: number;
+}
+
+/**
+ * Create a new session: spawn the agent, dismiss boot dialogs, wait for
+ * ready, return a handle.
+ *
+ * @throws `SessionExists` if a session with the same `{ namespace, name }`
+ *   already exists — the substrate never silently adopts.
+ * @throws `LoginRequired` if claude's login-method dialog fires (the
+ *   consumer must `claude auth` first).
+ * @throws `DialogStuck` if a recognized boot dialog persists after its
+ *   response.
+ * @throws `ReplTimeout` if the boot budget elapses before ready.
+ *
+ * @example
+ * ```ts
+ * import { create, claude } from "claudemux";
+ * const session = await create({ name: "job", cwd: process.cwd() });
+ * await session.send("Add a CHANGELOG entry");
+ * await session.wait();
+ * const text = await session.capture();
+ * ```
+ */
+export async function create(opts: CreateOptions): Promise<SessionHandle> {
+  const namespace = opts.namespace ?? "claudemux";
+  const agent = opts.agent ?? defaultAgent;
+  const backend = opts.backend ?? defaultBackend();
+  const target = targetOf(namespace, opts.name);
+
+  // Exists-check first. Never silently adopt an existing session — that is
+  // the lifecycle-policy footgun claudemux explicitly avoids.
+  if (await backend.exists(target)) {
+    throw new SessionExists(target);
+  }
+
+  const argvBuild = agent.buildArgv({
+    cwd: opts.cwd,
+    ...(opts.extraArgs ? { extraArgs: opts.extraArgs } : {}),
+  });
+  const mergedEnv: Record<string, string> = { ...(argvBuild.env ?? {}), ...(opts.env ?? {}) };
+  await backend.spawn({
+    namespace,
+    name: opts.name,
+    cwd: opts.cwd,
+    env: mergedEnv,
+    cmd: argvBuild.cmd,
+    argv: argvBuild.argv,
+  });
+
+  try {
+    await bootSession(backend, agent, target, {
+      ...(opts.bootTimeoutMs === undefined ? {} : { timeoutMs: opts.bootTimeoutMs }),
+    });
+  } catch (err) {
+    // Boot failed — best-effort teardown so we don't leak the half-booted
+    // session. kill() is idempotent so this is safe.
+    await backend.kill(target).catch(() => undefined);
+    throw err;
+  }
+
+  return makeHandle({ backend, agent, namespace, name: opts.name });
+}
+
+let _defaultBackend: Backend | null = null;
+function defaultBackend(): Backend {
+  if (_defaultBackend === null) {
+    _defaultBackend = tmuxBackend({ socket: mintSocket() });
+  }
+  return _defaultBackend;
+}
