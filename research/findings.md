@@ -277,7 +277,11 @@ What is in place:
    that loops over fixture scenarios under the harness primitives (private
    tmux socket, sandbox HOME, per-scenario timeout 30s, output cap 64 KB).
    Skips with an explanatory message when `scenarios` is empty.
-4. **`.github/workflows/permission-prompts.yml`** — re-validation workflow with
+4. **`.github/workflows/permission-prompts.yml`** *(retired/superseded — this
+   workflow was deleted in the Path-B simplification; see ticket `12455a20` /
+   decision 0010. `.github/workflows/` now holds only `ci.yml` and
+   `glyph-canary.yml`. The description below is historical.)* —
+   re-validation workflow with
    network isolation applied to the **test step** (via `docker run
    --network=none --read-only` against a job-built image), not to the
    prerequisite install steps. Two jobs: `validate-fixture` (lint-time
@@ -997,7 +1001,7 @@ No conditional updates to `brain/initiatives/claudemux-v0-0-1-minimum-viable-sub
 ### Durable CI canaries shipped
 
 - `.github/workflows/glyph-canary.yml` — daily glyph drift check; non-blocking; auto-files a tracking issue on failure.
-- `.github/workflows/permission-prompts.yml` — fixture re-validation on push + daily; runs inside a container with `--network=none --read-only`; lint-step belt-and-braces refuses to run if cwd / `$HOME` look real.
+- `.github/workflows/permission-prompts.yml` *(retired/superseded — deleted in the Path-B simplification; see ticket `12455a20` / decision 0010)* — fixture re-validation on push + daily; ran inside a container with `--network=none --read-only`; lint-step belt-and-braces refused to run if cwd / `$HOME` looked real.
 
 ### Environment caveat (carried in each section)
 

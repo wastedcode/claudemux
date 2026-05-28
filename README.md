@@ -36,13 +36,15 @@ The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "..."
 
 ```sh
 $ npm i claudemux
-$ claudemux spawn my-job --cwd ./fresh-repo
+$ claudemux spawn my-job --cwd ./fresh-repo --trust-workspace
 $ claudemux send my-job "Add a CHANGELOG entry for the next release"
 $ claudemux wait my-job
 idle
 $ claudemux capture my-job
 $ claudemux kill my-job
 ```
+
+The first spawn in a never-trusted folder needs `--trust-workspace` (above) — it fails closed otherwise, and the flag writes a persistent per-folder authority grant; see [Workspace trust (fail-closed)](#workspace-trust-fail-closed) before pointing it at code you don't control.
 
 The full verb set:
 
