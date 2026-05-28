@@ -73,6 +73,39 @@ export class LoginRequired extends ClaudemuxError {
 }
 
 /**
+ * Thrown by boot when the agent presents a workspace-trust dialog for a
+ * `cwd` the substrate has not been told to trust. Trusting a folder is an
+ * **authority grant** (the agent gains read/edit/execute on those files),
+ * so the substrate fails closed: it does **not** auto-answer the dialog —
+ * it throws this *before sending any keystroke* and leaves the decision to
+ * the consumer. Pass `trustWorkspace: true` to `create` (or `--trust-workspace`
+ * on the CLI) to opt in.
+ *
+ * @remarks
+ * Opting in writes a **persistent, global, per-cwd** trust flag to the
+ * agent's config (`~/.claude.json` → `projects[<abs-cwd>]`), NOT a
+ * session-scoped one: it outlives the claudemux process and applies to
+ * every future `claude` run in that path, including the user's own
+ * interactive sessions. Trust is sticky per `(HOME × cwd-path)` — fail-closed
+ * only protects the *first* run in an untrusted path; a reused checkout path
+ * a prior run (or the user) already trusted inherits trust silently. For
+ * untrusted-fork workloads (PR bots / CI), use an ephemeral unique checkout
+ * path or an ephemeral HOME per run.
+ */
+export class WorkspaceUntrusted extends ClaudemuxError {
+  /** The cwd the agent asked to trust. */
+  readonly cwd: string;
+
+  constructor(sessionName: string, cwd: string) {
+    super(
+      `workspace at ${JSON.stringify(cwd)} is not trusted; the agent asked to trust it. Pass trustWorkspace:true (or --trust-workspace) to grant the agent read/edit/execute on this folder — note this writes a persistent, per-folder trust flag to the agent's config`,
+      sessionName,
+    );
+    this.cwd = cwd;
+  }
+}
+
+/**
  * Thrown when the underlying pane's process has died but the pane container
  * is still present in the backend's data model (Case A pane-death).
  */

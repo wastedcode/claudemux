@@ -96,8 +96,22 @@ import {
   SessionGone,      // the session vanished from the backend
   BackendUnreachable,
   BackendError,
+  WorkspaceUntrusted, // cwd isn't trusted and trustWorkspace wasn't set (see below)
 } from "claudemux";
 ```
+
+### Workspace trust (fail-closed)
+
+The first time the agent runs in a folder it hasn't seen, it asks to trust it. Trusting a folder is an **authority grant** — the agent gains read/edit/execute on those files — so claudemux does **not** answer that prompt for you. By default `create` (and `claudemux spawn`) throw `WorkspaceUntrusted` *before sending any keystroke*. Opt in explicitly:
+
+```ts
+await create({ name: "job", cwd, trustWorkspace: true });   // library
+```
+```sh
+claudemux spawn job --cwd ./repo --trust-workspace          # CLI
+```
+
+⚠️ Opting in writes a **persistent, per-folder** trust flag to the agent's config (`~/.claude.json`) — it is *not* session-scoped and applies to every future run in that path, including your own interactive sessions. For untrusted-fork workloads (PR bots, CI on third-party code), use an **ephemeral unique checkout path or an ephemeral `HOME` per run** — trust is sticky per `(HOME × path)`, so a reused path a prior run trusted is trusted silently.
 
 ## 5. State model
 

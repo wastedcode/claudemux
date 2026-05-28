@@ -22,6 +22,21 @@ export interface BootDialog {
   respond:
     | { kind: "key"; key: "Enter" | "1" | "2" | "y" | "n" }
     | { kind: "throw"; errorClass: "LoginRequired" };
+  /**
+   * Optional authority gate. A gated dialog represents an authority grant
+   * (e.g. trusting a folder) that the substrate must NOT auto-answer by
+   * default — it fails closed. `boot.ts` throws the gate's error *before*
+   * sending the response key unless the consumer explicitly opted in via the
+   * matching `CreateOptions` flag. Dismissing it otherwise would make a
+   * silent policy decision for the caller (north-star: "report state, the
+   * consumer decides policy").
+   */
+  gate?: {
+    /** The `CreateOptions` boolean that must be `true` to auto-answer. */
+    option: "trustWorkspace";
+    /** The error thrown when the gate is closed (not opted in). */
+    errorClass: "WorkspaceUntrusted";
+  };
 }
 
 /**

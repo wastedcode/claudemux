@@ -31,6 +31,7 @@ describe("public surface — exports", () => {
       "BackendUnreachable",
       "BackendError",
       "InvalidSessionName",
+      "WorkspaceUntrusted",
     ] as const;
     for (const name of expected) {
       expect(typeof (publicSurface as Record<string, unknown>)[name]).toBe("function");

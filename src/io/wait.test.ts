@@ -99,21 +99,17 @@ describe("waitForState — transition-aware (the send→wait race)", () => {
     ).rejects.toThrow(/did not settle/);
   });
 
-  it("with a baseline, an instant turn (new idle, no working frame) still resolves", async () => {
-    // Edge: claude answers so fast we never capture a working frame — only
-    // the new idle, which DIFFERS from the pre-send baseline. The baseline
-    // arm catches this so wait doesn't hang.
-    const baseline = "old answer\n❯ ";
-    const backend = new FrameBackend(["new answer\n❯ "]);
-    const r = await waitForState(
-      backend,
-      agent,
-      ref,
-      { timeoutMs: 5_000 },
-      { stabilize },
-      baseline,
-    );
+  it("does NOT return on the post-submit empty prompt that precedes working", async () => {
+    // The real claude 2.1.153 timeline after Enter: the input box clears to
+    // an EMPTY `❯ ` (idle-looking) for ≤200ms BEFORE `esc to interrupt`
+    // appears. arm-on-observed-working means this leading empty idle is not a
+    // premature return — even though it's the very first frame. (A
+    // baseline-differs arm would have fired here and returned early; we
+    // dropped it for exactly this reason.)
+    const backend = new FrameBackend([READY, WORKING, WORKING, DONE]);
+    const r = await waitForState(backend, agent, ref, { timeoutMs: 5_000 }, { stabilize });
     expect(r).toBe("idle");
+    expect(await backend.capture(ref)).toContain("the answer is 42");
   });
 
   it("returns dialog / permission-prompt immediately (no transition required)", async () => {

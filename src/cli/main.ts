@@ -37,6 +37,10 @@ export function buildProgram(): Command {
     .description("start a session and wait for the REPL to be ready")
     .requiredOption("--cwd <path>", "working directory for the session")
     .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
+    .option(
+      "--trust-workspace",
+      "grant the agent read/edit/execute on --cwd (writes a persistent per-folder trust flag); without it, an untrusted folder fails closed",
+    )
     .action(
       async (
         name: string,
@@ -46,6 +50,7 @@ export function buildProgram(): Command {
           agent?: string;
           socket?: string;
           bootTimeoutMs?: number;
+          trustWorkspace?: boolean;
         },
       ) => {
         await spawnCli(name, opts);

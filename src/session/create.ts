@@ -31,6 +31,15 @@ export interface CreateOptions {
   env?: Record<string, string>;
   /** Boot timeout in ms (default 60_000). */
   bootTimeoutMs?: number;
+  /**
+   * Opt in to auto-dismissing the agent's workspace-trust dialog. Default
+   * **false** (fail closed). When the agent asks to trust `cwd` and this is
+   * not set, `create` throws `WorkspaceUntrusted` before any keystroke —
+   * trusting a folder is an authority grant the substrate won't make
+   * silently. See {@link WorkspaceUntrusted} for the persistent/global-trust
+   * caveats before enabling it for untrusted-fork (PR-bot / CI) workloads.
+   */
+  trustWorkspace?: boolean;
 }
 
 /**
@@ -41,6 +50,8 @@ export interface CreateOptions {
  *   already exists — the substrate never silently adopts.
  * @throws `LoginRequired` if claude's login-method dialog fires (the
  *   consumer must `claude auth` first).
+ * @throws `WorkspaceUntrusted` if the agent asks to trust `cwd` and
+ *   `trustWorkspace` was not set (thrown before any keystroke).
  * @throws `DialogStuck` if a recognized boot dialog persists after its
  *   response.
  * @throws `ReplTimeout` if the boot budget elapses before ready.
@@ -84,7 +95,9 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
 
   try {
     await bootSession(backend, agent, ref, {
+      cwd: opts.cwd,
       ...(opts.bootTimeoutMs === undefined ? {} : { timeoutMs: opts.bootTimeoutMs }),
+      ...(opts.trustWorkspace === undefined ? {} : { trustWorkspace: opts.trustWorkspace }),
     });
   } catch (err) {
     await backend.kill(ref).catch(() => undefined);

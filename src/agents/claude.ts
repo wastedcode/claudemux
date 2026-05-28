@@ -15,9 +15,6 @@ import type { AgentDef, BootDialog } from "./types.js";
  * ```
  */
 
-/** U+276F HEAVY RIGHT-POINTING ANGLE QUOTATION MARK — the REPL ready glyph. */
-const READY_GLYPH = "❯";
-
 /**
  * Pane-text substring matchers the classifier uses to detect Claude Code
  * permission prompts. Loaded at module init from the in-source fixture
@@ -76,24 +73,47 @@ const dialog: BootDialog[] = [
   },
   {
     id: "workspace-trust",
-    matches: (pane) => pane.includes("Do you trust the files in this folder?"),
+    // claude 2.1.153 wording: "Quick safety check: Is this a project you
+    // created or one you trust? … ❯ 1. Yes, I trust this folder". Match the
+    // option-label substring "trust this folder" — resilient to header copy
+    // edits. (Verified against authenticated 2.1.153 at product-acceptance.)
+    matches: (pane) => pane.includes("trust this folder"),
+    // Trusting a folder is an authority grant — fail closed. boot.ts throws
+    // WorkspaceUntrusted *before* sending "1" unless the consumer opted in
+    // via trustWorkspace. The "1" is the dismiss key used only when opted in.
     respond: { kind: "key", key: "1" },
+    gate: { option: "trustWorkspace", errorClass: "WorkspaceUntrusted" },
   },
 ];
 
 /**
- * The bottom-most non-blank pane line must START with `❯`. Menu-selection
- * uses of the same glyph (theme picker etc.) are mid-line with leading
- * whitespace and fail this test.
+ * Is the REPL idle and ready for *new* input? True when the bottom-N pane
+ * contains an **empty** input box — a line that is exactly the ready glyph
+ * followed by only whitespace (`/^❯\s*$/`; the empty box is `❯` + U+00A0 in
+ * claude 2.1.153, and `\s` covers U+00A0).
+ *
+ * Three things this gets right, all confirmed against authenticated 2.1.153:
+ *   - **Footer below the prompt.** 2.1.153 renders a status footer
+ *     (`⏵⏵ bypass permissions on …` or `? for shortcuts …`) on the line(s)
+ *     *below* `❯`, so the bottom-most non-blank line is the footer, not the
+ *     prompt. Scanning bottom-N for the box (not taking the last line) fixes
+ *     spawn-ready, `state→idle`, and `wait`.
+ *   - **Draft echo is NOT idle.** A pasted-but-unsubmitted turn shows
+ *     `❯ <draft text>` — non-empty after the glyph — so it does not match.
+ *     This is what stops `wait` from reading the post-`send` echo as a
+ *     completed turn (silent turn-loss).
+ *   - **Menu selection is NOT idle.** Theme/trust menus render `❯ 1. …` (a
+ *     digit follows) and are indented, so they don't match the column-0
+ *     empty box. (Dialogs are also caught earlier by their own matchers.)
+ *
+ * NOTE: structural readiness is necessary but not sufficient — the caller
+ * (`boot.ts`) must also confirm the pane is *stable* before declaring ready,
+ * because the empty box can flash during the welcome/MCP-init render before
+ * input is actually interactive. See `wait-needs-a-transition-not-a-snapshot`.
  */
+const EMPTY_PROMPT = /^❯\s*$/;
 function isReady(paneTextBottomN: string): boolean {
-  const lines = paneTextBottomN.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const raw = lines[i];
-    if (raw === undefined || raw.trim() === "") continue;
-    return raw.startsWith(READY_GLYPH);
-  }
-  return false;
+  return paneTextBottomN.split("\n").some((line) => EMPTY_PROMPT.test(line));
 }
 
 const rules: ClassifierRules = {
@@ -101,16 +121,14 @@ const rules: ClassifierRules = {
   // Mirrors the dialog list above so the classifier doesn't drift apart.
   dialog: (text) => dialog.some((d) => d.matches(text)),
   permissionPrompt: (text) => PERMISSION_PROMPT_SUBSTRINGS.some((s) => text.includes(s)),
-  // "Working" predicates inspect substrings claude emits while a turn is
-  // in flight. The "esc to interrupt" hint is documented in claude's help.
-  // We additionally accept the streaming-spinner shape "✻"/"⏺" and the
-  // explicit "thinking..." textual indicator.
-  working: (text) =>
-    text.includes("esc to interrupt") ||
-    text.includes("thinking...") ||
-    text.includes("Cooking") ||
-    text.includes("Crafting"),
-  // Idle is the qualified READY_GLYPH check.
+  // "esc to interrupt" is the reliable in-flight signal — present for the
+  // whole turn (verified ~2.2s on a trivial reply against 2.1.153). The
+  // post-turn summary (`✻ Crunched for 1s`) does NOT contain it, so matching
+  // the bare `✻` spinner glyph would false-positive on a *completed* turn.
+  // (The old gerund list `Cooking`/`Crafting` was stale — 2.1.153 uses
+  // `Brewing`/`Crunched`/… — and dead weight given the reliable signal.)
+  working: (text) => text.includes("esc to interrupt"),
+  // Idle is the empty-input-box check.
   idle: (text) => isReady(text),
 };
 

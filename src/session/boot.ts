@@ -1,13 +1,14 @@
 import type { AgentDef, BootDialog } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { DialogStuck, LoginRequired, ReplTimeout } from "../errors.js";
+import { DialogStuck, LoginRequired, ReplTimeout, WorkspaceUntrusted } from "../errors.js";
+import { stabilize } from "../io/stabilize.js";
 import { sleep } from "../util/sleep.js";
 import { CLASSIFIER_BOTTOM_N } from "./constants.js";
 import { formatSessionLabel } from "./ref.js";
 
 /**
- * Default total budget for boot: 60s. The dialog loop must reach
- * `agent.boot.isReady === true` within this window or `ReplTimeout` fires.
+ * Default total budget for boot: 60s. The dialog loop must reach a *stable*
+ * `agent.boot.isReady` within this window or `ReplTimeout` fires.
  */
 const DEFAULT_BOOT_TIMEOUT_MS = 60_000;
 
@@ -24,22 +25,53 @@ const POLL_INTERVAL_MS = 150;
 const DIALOG_ADVANCE_BUDGET_MS = 5_000;
 
 /**
- * Boot the session: dismiss any matching dialogs in order, then wait for
- * the agent's ready predicate. Throws on the three documented failures.
+ * Once `isReady` first matches, the pane must hold steady for this window
+ * before we declare boot complete. The empty `❯` input box can flash during
+ * the welcome / MCP-init render *before input is actually interactive* — a
+ * consumer that `send`s into a not-yet-interactive prompt loses the turn
+ * silently (the paste lands, never submits). Requiring stability lets the
+ * welcome/MCP render settle. Longer than `wait`'s idle window (250ms) because
+ * boot has more going on (box draw, remote-control line, MCP connections).
+ * See `engineer/wiki/wait-needs-a-transition-not-a-snapshot`.
+ */
+const READY_STABLE_WINDOW_MS = 1_200;
+
+/** Boot options threaded from `create`. */
+export interface BootOptions {
+  /** Total boot budget (default 60s). */
+  timeoutMs?: number;
+  /**
+   * Opt in to auto-dismissing the agent's workspace-trust dialog. Default
+   * **false** — trusting a folder is an authority grant the substrate does
+   * not make for the caller. Without it, an untrusted-cwd trust dialog
+   * throws `WorkspaceUntrusted` before any keystroke is sent. See that
+   * error's TSDoc for the persistent/global-trust caveats.
+   */
+  trustWorkspace?: boolean;
+  /** The cwd being booted into — carried on `WorkspaceUntrusted` for the caller. */
+  cwd?: string;
+}
+
+/**
+ * Boot the session: dismiss any matching dialogs in order, then wait for the
+ * agent's ready predicate to hold *stably*. Throws on the documented failures.
  *
+ * @throws `WorkspaceUntrusted` if the workspace-trust dialog fires and
+ *   `trustWorkspace` was not set — thrown *before* any keystroke, so no
+ *   persistent trust flag is written.
+ * @throws `LoginRequired` if the login-method dialog fires.
  * @throws `DialogStuck` if a recognized dialog persists after its response.
- * @throws `ReplTimeout` if the total budget elapses before ready.
- * @throws `LoginRequired` if the login-method dialog fires (claudemux
- *   assumes the user is already authenticated; firing this dialog is a
- *   setup error, not an auto-answerable prompt).
+ * @throws `ReplTimeout` if the total budget elapses before a stable ready.
  */
 export async function bootSession(
   backend: Backend,
   agent: AgentDef,
   ref: SessionRef,
-  opts: { timeoutMs?: number } = {},
+  opts: BootOptions = {},
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+  const trustWorkspace = opts.trustWorkspace ?? false;
+  const cwd = opts.cwd ?? ref.name;
   const start = Date.now();
 
   while (true) {
@@ -51,44 +83,81 @@ export async function bootSession(
     // Try every dialog matcher in order — the first that fires wins.
     const matched = agent.boot.dialogs.find((d) => d.matches(text));
     if (matched) {
-      await respondToDialog(backend, ref, matched);
+      await respondToDialog(backend, ref, matched, trustWorkspace, cwd);
       // Wait for the pane to advance past the matched dialog. If it stays,
       // either the response didn't land or the matcher misfired on history.
       await waitForAdvancement(backend, ref, matched);
       continue; // re-evaluate from the top
     }
 
-    // No dialog fired. Is the REPL ready?
-    if (agent.boot.isReady(text)) return;
+    // No dialog fired. Is the REPL ready — AND stable? The empty prompt can
+    // appear mid-render before input is interactive; require it to hold.
+    if (agent.boot.isReady(text)) {
+      const remaining = Math.max(0, timeoutMs - (Date.now() - start));
+      const r = await stabilize(backend, ref, {
+        lines: CLASSIFIER_BOTTOM_N,
+        windowMs: READY_STABLE_WINDOW_MS,
+        pollMs: POLL_INTERVAL_MS,
+        timeoutMs: Math.min(remaining, READY_STABLE_WINDOW_MS * 6),
+      });
+      // Re-confirm ready on the settled pane (the render may have moved to a
+      // dialog or back to working; only a stable ready counts).
+      if (r.stable && agent.boot.isReady(r.text) && !anyDialog(agent, r.text)) {
+        return;
+      }
+      continue; // not stable yet (still rendering) — loop and re-evaluate
+    }
 
     // Neither dialog nor ready — keep polling.
     await sleep(POLL_INTERVAL_MS);
   }
 }
 
+function anyDialog(agent: AgentDef, text: string): boolean {
+  return agent.boot.dialogs.some((d) => d.matches(text));
+}
+
 /**
- * Send the dialog's response. For the `throw` variant, raises the typed
- * error directly. For the `key` variant: sends the key, plus an `Enter`
- * follow-up if the response is a non-submit digit/letter — the only
- * submit-on-press key in the substrate's key set is `Enter`.
+ * Respond to a matched dialog.
+ *
+ * - `respond.kind === "throw"` → raise the typed error.
+ * - A **gated** dialog (an authority grant, e.g. workspace-trust) → throw the
+ *   gate's error *before sending any key* unless the consumer opted in. The
+ *   throw-before-keystroke order is load-bearing: answering the trust dialog
+ *   writes a persistent trust flag, so we must not send the key on the
+ *   fail-closed path.
+ * - `respond.kind === "key"` → send the key; non-Enter keys get an Enter
+ *   follow-up to submit (Enter is its own submit).
  */
 async function respondToDialog(
   backend: Backend,
   ref: SessionRef,
   dialog: BootDialog,
+  trustWorkspace: boolean,
+  cwd: string,
 ): Promise<void> {
   if (dialog.respond.kind === "throw") {
-    // v0.0.1 has only LoginRequired; the exhaustive switch will surface
-    // an unhandled case as a typecheck error when a second error class is added.
     switch (dialog.respond.errorClass) {
       case "LoginRequired":
         throw new LoginRequired(formatSessionLabel(ref));
     }
   }
+
+  // Authority gate: fail closed unless opted in — BEFORE any keystroke.
+  if (dialog.gate) {
+    const optedIn = dialog.gate.option === "trustWorkspace" && trustWorkspace;
+    if (!optedIn) {
+      switch (dialog.gate.errorClass) {
+        case "WorkspaceUntrusted":
+          throw new WorkspaceUntrusted(formatSessionLabel(ref), cwd);
+      }
+    }
+  }
+
   const key = dialog.respond.key;
   await backend.send(ref, { kind: "key", key });
-  // Numeric/letter dialog responses (1, 2, y, n) typically need an Enter
-  // to submit; Enter is its own submit, so no follow-up needed there.
+  // Numeric/letter dialog responses (1, 2, y, n) typically need an Enter to
+  // submit; Enter is its own submit, so no follow-up needed there.
   if (key !== "Enter") {
     await backend.send(ref, { kind: "key", key: "Enter" });
   }

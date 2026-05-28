@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AgentDef } from "../agents/types.js";
+import type { AgentDef, BootDialog } from "../agents/types.js";
 import type { Backend, BackendEvent, SendPayload, SessionRef } from "../backends/types.js";
-import { DialogStuck, LoginRequired, ReplTimeout } from "../errors.js";
+import { DialogStuck, LoginRequired, ReplTimeout, WorkspaceUntrusted } from "../errors.js";
 import { bootSession } from "./boot.js";
 
 /**
@@ -149,6 +149,74 @@ describe("bootSession — error paths", () => {
     await expect(
       bootSession(fb, agent, { namespace: "ns", name: "sess" }, { timeoutMs: 500 }),
     ).rejects.toThrow(ReplTimeout);
+  });
+});
+
+describe("bootSession — workspace-trust gate (fail closed)", () => {
+  const trustDialog: BootDialog = {
+    id: "workspace-trust",
+    matches: (t) => t.includes("DIALOG_TRUST"),
+    respond: { kind: "key", key: "1" },
+    gate: { option: "trustWorkspace", errorClass: "WorkspaceUntrusted" },
+  };
+
+  it("throws WorkspaceUntrusted and sends NO keystroke when trustWorkspace is unset", async () => {
+    const fb = new FakeBackend(["DIALOG_TRUST", "READY"]);
+    const agent = stubAgent([trustDialog]);
+    const err = await bootSession(
+      fb,
+      agent,
+      { namespace: "ns", name: "job" },
+      { cwd: "/work" },
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(WorkspaceUntrusted);
+    // The load-bearing invariant: NO key was sent (a key would write the
+    // persistent trust flag before we could refuse).
+    expect(fb.sent).toEqual([]);
+    expect((err as WorkspaceUntrusted).cwd).toBe("/work");
+  });
+
+  it("dismisses the trust dialog (1 + Enter) and reaches ready when trustWorkspace is true", async () => {
+    const fb = new FakeBackend(["DIALOG_TRUST", "READY"]);
+    const agent = stubAgent([trustDialog]);
+    await bootSession(
+      fb,
+      agent,
+      { namespace: "ns", name: "job" },
+      { cwd: "/work", trustWorkspace: true, timeoutMs: 10_000 },
+    );
+    expect(fb.sent).toEqual([
+      { kind: "key", key: "1" },
+      { kind: "key", key: "Enter" },
+    ]);
+  });
+});
+
+describe("bootSession — premature-ready guard (stabilize gate)", () => {
+  it("does NOT return on a transient ready that immediately changes (welcome/MCP render)", async () => {
+    // Frame 0 looks ready ("…READY"), but the very next capture changes to a
+    // working-shaped frame and only later settles back to ready. A
+    // snapshot-boot would return on frame 0 (premature); the stabilize gate
+    // must wait for the pane to hold steady.
+    let calls = 0;
+    const flapThenSettle: Backend = {
+      id: "flap",
+      spawn: () => Promise.resolve(),
+      kill: () => Promise.resolve(),
+      exists: () => Promise.resolve(true),
+      list: () => Promise.resolve([]),
+      send: () => Promise.resolve(),
+      capture: () => {
+        calls++;
+        // First few captures flap (rendering); then settle to a stable ready.
+        return Promise.resolve(calls < 4 ? `render-${calls} READY` : "settled READY");
+      },
+      onCommand: () => () => undefined,
+    };
+    const agent = stubAgent([]);
+    await bootSession(flapThenSettle, agent, { namespace: "ns", name: "x" }, { timeoutMs: 10_000 });
+    // It must have polled past the flapping frames before declaring ready.
+    expect(calls).toBeGreaterThan(4);
   });
 });
 

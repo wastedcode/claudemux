@@ -21,6 +21,7 @@ export {
   ReplTimeout,
   SessionExists,
   SessionGone,
+  WorkspaceUntrusted,
 } from "./errors.js";
 
 export { create } from "./session/create.js";
