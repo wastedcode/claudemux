@@ -1,0 +1,4 @@
+{
+  "_note": "Pane-text substring matchers for claude's permission prompts. Runtime mirror of research/fixtures/permission-prompt-classifier-fixture.json — kept empty for v0.0.1 per the founder-ratified (C)+(A) path; populated at product-acceptance against authenticated claude.",
+  "scenarios": []
+}

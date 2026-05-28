@@ -20,7 +20,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "check": "biome check .",
     "format": "biome format --write .",
     "lint": "biome lint .",
