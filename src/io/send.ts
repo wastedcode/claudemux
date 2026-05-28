@@ -45,8 +45,11 @@ export async function sendOnce(
   await backend.send(ref, { kind: "paste", text });
   await backend.send(ref, { kind: "key", key: "Enter" });
 
+  // Always (over)write — this turn's baseline replaces any prior turn's, and
+  // an empty value clears it when we couldn't establish a fresh one (e.g. the
+  // pre-send capture failed). Otherwise a later wait could arm on a *stale*
+  // fingerprint and return the previous turn's idle. Empty == "no baseline",
+  // so wait falls back to arming on an observed working frame.
   const fingerprint = await captureSendBaseline(backend, agent, ref, pre);
-  if (fingerprint !== undefined) {
-    await writeSendBaseline(backend, ref, fingerprint);
-  }
+  await writeSendBaseline(backend, ref, fingerprint ?? "");
 }

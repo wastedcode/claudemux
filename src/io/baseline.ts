@@ -92,9 +92,12 @@ export async function readSendBaseline(
 }
 
 /**
- * Persist the post-submit baseline fingerprint for a later `wait`. Best-effort
- * — a metadata write failure must never fail the `send` (whose contract is
- * byte delivery); `wait` simply falls back to observed-working arming.
+ * Persist the post-submit baseline fingerprint for a later `wait`. An empty
+ * `fingerprint` clears the baseline (so `readSendBaseline` reports "unset") —
+ * `send` uses that to drop a prior turn's stale fingerprint when it couldn't
+ * establish a fresh one. Best-effort — a metadata write failure must never
+ * fail the `send` (whose contract is byte delivery); `wait` then falls back to
+ * observed-working arming.
  */
 export async function writeSendBaseline(
   backend: Backend,

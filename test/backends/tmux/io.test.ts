@@ -211,6 +211,9 @@ describe("session metadata — set/get round-trip (the cross-process send-baseli
     // Overwrite → latest value wins (each send replaces the baseline).
     await setSessionOption(exec, target, "send-baseline", "cafef00d");
     expect(await getSessionOption(exec, target, "send-baseline")).toBe("cafef00d");
+    // Empty value clears it (send drops a stale baseline it couldn't refresh).
+    await setSessionOption(exec, target, "send-baseline", "");
+    expect(await getSessionOption(exec, target, "send-baseline")).toBeUndefined();
 
     await exec.run(["kill-session", "-t", target], { sessionName: target });
   });
