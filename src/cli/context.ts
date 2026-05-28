@@ -2,7 +2,7 @@ import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend } from "../backends/types.js";
 import { DEFAULT_NAMESPACE } from "../session/constants.js";
-import { sharedDefaultBackend } from "../session/default-backend.js";
+import { backendWithSocket, sharedDefaultBackend } from "../session/default-backend.js";
 import { attachHandle } from "../session/handle.js";
 import type { SessionHandle } from "../types.js";
 
@@ -10,6 +10,11 @@ import type { SessionHandle } from "../types.js";
 export interface CommonOpts {
   namespace?: string;
   agent?: string;
+  /**
+   * Explicit socket override. Precedence:
+   *   `--socket <name>` flag > `CLAUDEMUX_SOCKET` env > default `"claudemux"`.
+   */
+  socket?: string;
 }
 
 /**
@@ -32,15 +37,22 @@ export function resolveNamespace(name: string | undefined): string {
   return name ?? DEFAULT_NAMESPACE;
 }
 
-/** The default backend, lazily shared across CLI invocations in one process. */
-export function backend(): Backend {
+/**
+ * Resolve the backend for this CLI invocation. If `--socket` was passed,
+ * builds a fresh backend on that socket; otherwise returns the
+ * process-wide shared default (which itself honors `CLAUDEMUX_SOCKET`).
+ */
+export function backend(opts: CommonOpts = {}): Backend {
+  if (opts.socket !== undefined && opts.socket.trim() !== "") {
+    return backendWithSocket(opts.socket);
+  }
   return sharedDefaultBackend();
 }
 
 /** Attach a session handle for an existing session — the CLI's reattach path. */
 export function handleFor(o: CommonOpts & { name: string }): SessionHandle {
   return attachHandle({
-    backend: backend(),
+    backend: backend(o),
     agent: resolveAgent(o.agent),
     namespace: resolveNamespace(o.namespace),
     name: o.name,

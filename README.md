@@ -55,6 +55,8 @@ The full verb set:
 
 Every command accepts `--namespace <name>` (default `claudemux`) so two consumers on one machine don't collide.
 
+All `claudemux` invocations from the same user share one rendezvous socket (the default `claudemux` socket file, owned per-UID by the OS). That's how `spawn` in one process is visible to `send`/`wait`/`capture` in subsequent processes. To opt into an isolated socket (parallel CI, debugging), pass `--socket <name>` or set `CLAUDEMUX_SOCKET=<name>` in the environment.
+
 ## 4. Library usage
 
 The library mirrors the CLI. The canonical 30-second example lives in [`examples/spawn-send-wait-capture.ts`](./examples/spawn-send-wait-capture.ts) and is the only canonical sample — README snippets reference it rather than duplicate it.

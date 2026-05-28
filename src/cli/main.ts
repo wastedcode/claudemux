@@ -15,85 +15,115 @@ import { waitCli } from "./wait.js";
  *
  * Verb names match the library 1:1 — `claudemux send name "..."` is
  * `send(name, "...")` on the library side. Help strings carry zero
- * references to any specific backend (the substrate is backend-neutral
- * by design; tmux is one implementation detail).
+ * references to any specific backend.
  */
 export function buildProgram(): Command {
   const program = new Command();
   program.name("claudemux").description("Drive long-lived Claude Code sessions from Node.");
 
-  const ns = (cmd: Command) =>
+  // Every verb accepts these three: namespace prefix, agent kind, and an
+  // explicit socket override (the latter for dev / debugging — most users
+  // share the default socket).
+  const common = (cmd: Command) =>
     cmd
       .option("-n, --namespace <name>", 'session namespace (default: "claudemux")')
-      .option("-a, --agent <name>", 'agent (default: "claude"; only "claude" supported in v0.0.1)');
+      .option("-a, --agent <name>", 'agent (default: "claude"; only "claude" supported in v0.0.1)')
+      .option(
+        "-s, --socket <name>",
+        'explicit socket name (default: $CLAUDEMUX_SOCKET or "claudemux")',
+      );
 
-  ns(program.command("spawn <name>"))
+  common(program.command("spawn <name>"))
     .description("start a session and wait for the REPL to be ready")
     .requiredOption("--cwd <path>", "working directory for the session")
     .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
     .action(
       async (
         name: string,
-        opts: { cwd: string; namespace?: string; agent?: string; bootTimeoutMs?: number },
+        opts: {
+          cwd: string;
+          namespace?: string;
+          agent?: string;
+          socket?: string;
+          bootTimeoutMs?: number;
+        },
       ) => {
         await spawnCli(name, opts);
       },
     );
 
-  ns(program.command("send <name> <text>"))
+  common(program.command("send <name> <text>"))
     .description("deliver text as one logical user turn (use '-' to read from stdin)")
-    .action(async (name: string, text: string, opts: { namespace?: string; agent?: string }) => {
-      await sendCli(name, text, opts);
-    });
+    .action(
+      async (
+        name: string,
+        text: string,
+        opts: { namespace?: string; agent?: string; socket?: string },
+      ) => {
+        await sendCli(name, text, opts);
+      },
+    );
 
-  ns(program.command("wait <name>"))
+  common(program.command("wait <name>"))
     .description("block until the session reaches idle/permission-prompt/dialog")
     .option("--timeout-ms <ms>", "timeout in ms (default 300000)", parseIntOpt)
     .action(
-      async (name: string, opts: { namespace?: string; agent?: string; timeoutMs?: number }) => {
+      async (
+        name: string,
+        opts: { namespace?: string; agent?: string; socket?: string; timeoutMs?: number },
+      ) => {
         await waitCli(name, opts);
       },
     );
 
-  ns(program.command("state <name>"))
+  common(program.command("state <name>"))
     .description("print the current pane state")
-    .action(async (name: string, opts: { namespace?: string; agent?: string }) => {
+    .action(async (name: string, opts: { namespace?: string; agent?: string; socket?: string }) => {
       await stateCli(name, opts);
     });
 
-  ns(program.command("capture <name>"))
+  common(program.command("capture <name>"))
     .description("print the pane text")
     .option("--ansi", "preserve escape sequences")
     .option("--lines <n>", "print only the bottom-N lines", parseIntOpt)
     .action(
       async (
         name: string,
-        opts: { namespace?: string; agent?: string; ansi?: boolean; lines?: number },
+        opts: {
+          namespace?: string;
+          agent?: string;
+          socket?: string;
+          ansi?: boolean;
+          lines?: number;
+        },
       ) => {
         await captureCli(name, opts);
       },
     );
 
-  program
-    .command("kill <name>")
+  common(program.command("kill <name>"))
     .description("kill the named session (idempotent — kill of a missing session is success)")
-    .option("-n, --namespace <name>", 'session namespace (default: "claudemux")')
-    .action(async (name: string, opts: { namespace?: string }) => {
+    .action(async (name: string, opts: { namespace?: string; socket?: string }) => {
       await killCli(name, opts);
     });
 
-  program
-    .command("list [namespace]")
+  common(program.command("list [namespace]"))
     .description("print short session names in the namespace, one per line")
-    .action(async (namespace: string | undefined) => {
-      await listCli(namespace === undefined ? {} : { namespace });
-    });
+    .action(
+      async (positionalNs: string | undefined, opts: { namespace?: string; socket?: string }) => {
+        // Accept both the positional and the --namespace flag; flag wins
+        // if both are present (the CLI vocabulary across verbs uses --namespace).
+        const ns = opts.namespace ?? positionalNs;
+        await listCli({
+          ...(ns === undefined ? {} : { namespace: ns }),
+          ...(opts.socket === undefined ? {} : { socket: opts.socket }),
+        });
+      },
+    );
 
-  program
-    .command("exists <name>")
+  common(program.command("exists <name>"))
     .description('print "true"/"false"; exit 0 if alive, 1 if not')
-    .option("-n, --namespace <name>", 'session namespace (default: "claudemux")')
-    .action(async (name: string, opts: { namespace?: string }) => {
+    .action(async (name: string, opts: { namespace?: string; socket?: string }) => {
       await existsCli(name, opts);
     });
 

@@ -12,7 +12,7 @@ export async function spawnCli(name: string, opts: SpawnCliOpts): Promise<void> 
   await create({
     name,
     cwd: opts.cwd,
-    backend: backend(),
+    backend: backend(opts),
     agent: resolveAgent(opts.agent),
     namespace: resolveNamespace(opts.namespace),
     ...(opts.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: opts.bootTimeoutMs }),

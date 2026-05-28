@@ -9,6 +9,6 @@ export async function killCli(name: string, opts: CommonOpts = {}): Promise<void
   await kill({
     name,
     namespace: resolveNamespace(opts.namespace),
-    backend: backend(),
+    backend: backend(opts),
   });
 }

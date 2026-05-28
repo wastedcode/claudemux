@@ -9,7 +9,7 @@ export async function existsCli(name: string, opts: CommonOpts = {}): Promise<vo
   const ok = await exists({
     name,
     namespace: resolveNamespace(opts.namespace),
-    backend: backend(),
+    backend: backend(opts),
   });
   process.stdout.write(`${ok}\n`);
   process.exit(ok ? 0 : 1);
