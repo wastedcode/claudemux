@@ -133,7 +133,7 @@ describe("permission-prompt is reserved, NOT emitted in v0.0.1 (ADR 0010 — det
     // holds), and an interactive default-mode session that hits one runs out
     // its wait() budget → ReplTimeout. Documented fix: a non-interactive
     // permission mode (README §5). The enumerated shapes are kept in
-    // research/fixtures/ as the v0.1 starting point.
+    // test/fixtures/ as the v0.1 starting point.
     expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(false);
     expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(false);
   });

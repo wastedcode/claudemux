@@ -22,7 +22,7 @@ import type { AgentDef, BootDialog } from "./types.js";
  * member of the public `State` type; v0.1 begins emitting it (non-breaking)
  * once this const is populated, paired with a `respond()` primitive to answer
  * the prompt. The enumerated shapes (the v0.1 starting point) live in
- * `research/fixtures/permission-prompt-classifier-fixture.json`; the v0.0.1
+ * `test/fixtures/permission-prompt-classifier-fixture.json`; the v0.0.1
  * consequence and the non-interactive-mode workaround are documented in README §5.
  */
 const PERMISSION_PROMPT_SUBSTRINGS: readonly string[] = [];

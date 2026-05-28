@@ -1,8 +1,16 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    // The permission-prompt replay test spawns a REAL authenticated claude and
+    // replays untrusted pane-text scenarios against it. It must run only under
+    // a dedicated network-isolated (`--network=none`) workflow — its original
+    // workflow was retired in the Path-B simplification (ADR 0010) and is
+    // re-introduced in v0.1. It is kept out of the general suite / required-check
+    // gate here so no stray `CLAUDEMUX_LIVE_PERMISSION_PROMPTS=1` can fire
+    // un-isolated live claude in the gatekeeper path. See the file header.
+    exclude: [...configDefaults.exclude, "test/fixtures/permission-prompts.test.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // Integration tests touch the real ~/.claude/.do-not-touch-sentinel file
