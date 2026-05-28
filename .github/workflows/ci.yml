@@ -1,4 +1,12 @@
-# Substrate CI — bootstrapped at T1, fleshed out with the matrix + safety greps at T12.
+# claudemux CI — the substrate's required-check workflow.
+#
+# Two job lanes:
+#   - `gates`: lint, typecheck, public-surface + safety greps, npm-pack
+#     assertion. Runs on every push/PR — cheap and structural.
+#   - `matrix`: full test suite against tmux 3.0 / 3.2 / 3.4 / 3.5a × {ubuntu, macos}.
+#     Tmux is installed from source per cell (apt's default tmux doesn't
+#     cover the version matrix); the build is cached so re-runs are fast.
+
 name: ci
 
 on:
@@ -7,23 +15,87 @@ on:
   pull_request:
 
 jobs:
-  lint-and-typecheck:
+  gates:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm ci || npm install
-      - run: npm run check
-      - run: npm run typecheck
+          cache: npm
+      - run: npm ci
+      - name: biome check
+        run: npm run check
+      - name: typecheck
+        run: npm run typecheck
+      - name: build
+        run: npm run build
+      - name: safety-grep
+        run: bash scripts/safety-grep.sh .
+      - name: layering-grep
+        run: bash scripts/layering-grep.sh .
+      - name: no-tmux-in-public
+        run: bash scripts/no-tmux-in-public.sh .
+      - name: assert-npm-pack
+        run: bash scripts/assert-npm-pack.sh .
 
-  unit-tests:
-    runs-on: ubuntu-latest
+  matrix:
+    needs: gates
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        tmux: ["3.0a", "3.2a", "3.4", "3.5a"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm ci || npm install
-      - run: npm run test:unit
+          cache: npm
+
+      - name: Cache tmux build
+        id: cache-tmux
+        uses: actions/cache@v4
+        with:
+          path: ~/tmux-${{ matrix.tmux }}/install
+          key: tmux-${{ matrix.tmux }}-${{ matrix.os }}-v1
+
+      - name: Install tmux build deps (Linux)
+        if: runner.os == 'Linux' && steps.cache-tmux.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libevent-dev libncurses-dev bison pkg-config
+
+      - name: Install tmux build deps (macOS)
+        if: runner.os == 'macOS' && steps.cache-tmux.outputs.cache-hit != 'true'
+        run: brew install libevent ncurses bison pkg-config automake autoconf
+
+      - name: Build tmux ${{ matrix.tmux }} from source
+        if: steps.cache-tmux.outputs.cache-hit != 'true'
+        run: |
+          cd ~
+          curl -fsSL -o tmux.tar.gz \
+            "https://github.com/tmux/tmux/releases/download/${{ matrix.tmux }}/tmux-${{ matrix.tmux }}.tar.gz"
+          mkdir -p tmux-${{ matrix.tmux }}
+          tar xzf tmux.tar.gz -C tmux-${{ matrix.tmux }} --strip-components 1
+          cd tmux-${{ matrix.tmux }}
+          ./configure --prefix=$HOME/tmux-${{ matrix.tmux }}/install
+          make -j2
+          make install
+
+      - name: Put tmux ${{ matrix.tmux }} on PATH
+        run: |
+          echo "$HOME/tmux-${{ matrix.tmux }}/install/bin" >> $GITHUB_PATH
+
+      - name: Verify tmux version
+        run: tmux -V
+
+      - name: Install claude (for integration tests)
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
