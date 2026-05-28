@@ -4,15 +4,9 @@ import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForState } from "../io/wait.js";
 import { classify } from "../state/classifier.js";
-import type { BackendCommandEvent, IdleState, ReadyOpts, SessionHandle, State } from "../types.js";
+import type { BackendCommandEvent, ReadyOpts, SessionHandle, State } from "../types.js";
+import { CLASSIFIER_BOTTOM_N } from "./constants.js";
 import { Mutex } from "./mutex.js";
-
-/**
- * The classifier scans only the bottom-N lines of the pane to avoid
- * scrollback false-positives. 50 matches the boot window used in
- * `session/boot.ts`.
- */
-const CLASSIFIER_BOTTOM_N = 50;
 
 interface HandleDeps {
   backend: Backend;
@@ -48,5 +42,3 @@ async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Pr
   const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
   return classify(text, agent.rules);
 }
-
-export type { IdleState };

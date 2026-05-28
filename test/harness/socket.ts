@@ -1,25 +1,15 @@
-import { randomBytes } from "node:crypto";
-
 /**
- * Mint a unique tmux socket name for one test. The `-L <name>` flag isolates
- * the test's tmux server from any user-owned server on the machine.
- *
- * The `-f /dev/null` flag is the actual "never reads `~/.tmux.conf`"
- * guarantee — see `engineer/wiki/tmux-private-server-bootstrap`. Both are
- * required on every tmux invocation; this helper always emits both.
+ * Test-harness wrapper around the substrate's socket-minting helper plus a
+ * convenience for the test's tmux argv prefix. The minting logic itself
+ * lives in the substrate (`src/backends/tmux/socket.ts`) so tests and
+ * production agree on the socket-name shape.
  */
-export function mintSocket(): string {
-  // Short enough to keep argv readable, long enough that two tests cannot collide.
-  return `claudemux-test-${randomBytes(6).toString("hex")}`;
-}
+export { mintSocket } from "../../src/backends/tmux/socket.js";
 
 /**
  * Build a tmux argv prefix with the test's private socket + the no-config flag.
- *
- * @example
- * ```ts
- * await run("tmux", tmuxArgs(socket, "new-session", "-d", "-s", "x"));
- * ```
+ * Used by harness.test.ts for the discipline check; production code goes
+ * through `TmuxExec.run` which enforces the same prefix on every invocation.
  */
 export function tmuxArgs(socket: string, ...rest: string[]): string[] {
   return ["-L", socket, "-f", "/dev/null", ...rest];

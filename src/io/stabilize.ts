@@ -1,4 +1,5 @@
 import type { Backend, SessionRef } from "../backends/types.js";
+import { sleep } from "../util/sleep.js";
 
 /**
  * "Pane unchanged for windowMs" probe. Captures the bottom-N pane region at
@@ -37,7 +38,7 @@ export async function stabilize(
     if (Date.now() - unchangedSince >= opts.windowMs) {
       return { stable: true, text: lastText };
     }
-    await new Promise((res) => setTimeout(res, opts.pollMs));
+    await sleep(opts.pollMs);
     const now = await backend.capture(ref, { lines: opts.lines });
     if (now !== lastText) {
       lastText = now;

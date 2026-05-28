@@ -7,6 +7,7 @@ import { bootSession } from "./boot.js";
 import { DEFAULT_NAMESPACE } from "./constants.js";
 import { sharedDefaultBackend } from "./default-backend.js";
 import { makeHandle } from "./handle.js";
+import { formatSessionLabel } from "./ref.js";
 
 /**
  * Options for {@link create}. The substrate provides sensible defaults so
@@ -61,7 +62,7 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
   // Exists-check first. Never silently adopt an existing session — that is
   // the lifecycle-policy footgun claudemux explicitly avoids.
   if (await backend.exists(ref)) {
-    throw new SessionExists(`${namespace}--${opts.name}`);
+    throw new SessionExists(formatSessionLabel(ref));
   }
 
   const argvBuild = agent.buildArgv({

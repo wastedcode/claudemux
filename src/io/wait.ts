@@ -1,18 +1,15 @@
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
 import { ReplTimeout } from "../errors.js";
+import { CLASSIFIER_BOTTOM_N } from "../session/constants.js";
+import { formatSessionLabel } from "../session/ref.js";
 import { classify } from "../state/classifier.js";
 import type { IdleState, ReadyOpts } from "../types.js";
+import { sleep } from "../util/sleep.js";
 import { type StabilizeResult, stabilize as defaultStabilize } from "./stabilize.js";
 
 /** Default total budget for `wait()`: 5 minutes. */
 const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
-
-/**
- * Bottom-N lines the classifier scans. Same value as `session/boot.ts` so a
- * dialog mid-stream is detected consistently.
- */
-const CLASSIFIER_BOTTOM_N = 50;
 
 /** How long pane text must be unchanged before declaring "idle." */
 const IDLE_STABLE_WINDOW_MS = 250;
@@ -49,7 +46,7 @@ export async function waitForState(
 
   while (true) {
     if (Date.now() - start > timeoutMs) {
-      throw new ReplTimeout(`${ref.namespace}--${ref.name}`, timeoutMs);
+      throw new ReplTimeout(formatSessionLabel(ref), timeoutMs);
     }
 
     const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
@@ -73,6 +70,6 @@ export async function waitForState(
     }
 
     // working / unknown → keep polling.
-    await new Promise((res) => setTimeout(res, POLL_MS));
+    await sleep(POLL_MS);
   }
 }

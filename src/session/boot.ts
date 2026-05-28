@@ -1,6 +1,9 @@
 import type { AgentDef, BootDialog } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
 import { DialogStuck, LoginRequired, ReplTimeout } from "../errors.js";
+import { sleep } from "../util/sleep.js";
+import { CLASSIFIER_BOTTOM_N } from "./constants.js";
+import { formatSessionLabel } from "./ref.js";
 
 /**
  * Default total budget for boot: 60s. The dialog loop must reach
@@ -12,13 +15,6 @@ const DEFAULT_BOOT_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 150;
 
 /**
- * How many lines from the bottom of the pane to scan for dialog/ready
- * patterns. 50 covers claude's tallest dialog (theme picker, ~10 lines)
- * with comfortable headroom; prevents scrollback false-positives.
- */
-const BOTTOM_N_LINES = 50;
-
-/**
  * After we respond to a dialog, the pane must show *something different*
  * within this window. If the same dialog text persists past it, we throw
  * `DialogStuck` — the response key didn't advance the pane, which means
@@ -26,11 +22,6 @@ const BOTTOM_N_LINES = 50;
  * isn't accepting keys (the latter is a setup error worth surfacing loudly).
  */
 const DIALOG_ADVANCE_BUDGET_MS = 5_000;
-
-/** Render a SessionRef into the typed-error session-name slot. */
-function refLabel(ref: SessionRef): string {
-  return `${ref.namespace}--${ref.name}`;
-}
 
 /**
  * Boot the session: dismiss any matching dialogs in order, then wait for
@@ -53,9 +44,9 @@ export async function bootSession(
 
   while (true) {
     if (Date.now() - start > timeoutMs) {
-      throw new ReplTimeout(refLabel(ref), timeoutMs);
+      throw new ReplTimeout(formatSessionLabel(ref), timeoutMs);
     }
-    const text = await backend.capture(ref, { lines: BOTTOM_N_LINES });
+    const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
 
     // Try every dialog matcher in order — the first that fires wins.
     const matched = agent.boot.dialogs.find((d) => d.matches(text));
@@ -71,7 +62,7 @@ export async function bootSession(
     if (agent.boot.isReady(text)) return;
 
     // Neither dialog nor ready — keep polling.
-    await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
+    await sleep(POLL_INTERVAL_MS);
   }
 }
 
@@ -87,11 +78,12 @@ async function respondToDialog(
   dialog: BootDialog,
 ): Promise<void> {
   if (dialog.respond.kind === "throw") {
-    if (dialog.respond.errorClass === "LoginRequired") {
-      throw new LoginRequired(refLabel(ref));
+    // v0.0.1 has only LoginRequired; the exhaustive switch will surface
+    // an unhandled case as a typecheck error when a second error class is added.
+    switch (dialog.respond.errorClass) {
+      case "LoginRequired":
+        throw new LoginRequired(formatSessionLabel(ref));
     }
-    // Future error classes go here; v0.0.1 has only LoginRequired.
-    throw new LoginRequired(refLabel(ref));
   }
   const key = dialog.respond.key;
   await backend.send(ref, { kind: "key", key });
@@ -114,9 +106,9 @@ async function waitForAdvancement(
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < DIALOG_ADVANCE_BUDGET_MS) {
-    await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
-    const now = await backend.capture(ref, { lines: BOTTOM_N_LINES });
+    await sleep(POLL_INTERVAL_MS);
+    const now = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
     if (!matched.matches(now)) return;
   }
-  throw new DialogStuck(refLabel(ref), matched.id);
+  throw new DialogStuck(formatSessionLabel(ref), matched.id);
 }
