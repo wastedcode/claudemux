@@ -34,6 +34,33 @@ describe("validateNamePart", () => {
     expect(() => validateNamePart("name", "-flag-like")).toThrow(InvalidSessionName);
   });
 
+  describe("rejects control characters (C0) with a typed error, not a raw TypeError", () => {
+    it("NUL byte (the one that slips past a punctuation-only check → spawn TypeError)", () => {
+      const nul = `foo${String.fromCharCode(0)}bar`;
+      expect(() => validateNamePart("name", nul)).toThrow(InvalidSessionName);
+      expect(() => validateNamePart("namespace", nul)).toThrow(InvalidSessionName);
+    });
+
+    it("the full C0 control range (0x00–0x1f)", () => {
+      for (let code = 0x00; code <= 0x1f; code++) {
+        const value = `a${String.fromCharCode(code)}b`;
+        expect(
+          () => validateNamePart("name", value),
+          `code point 0x${code.toString(16)} should be rejected`,
+        ).toThrow(InvalidSessionName);
+      }
+    });
+
+    it("the rejection is InvalidSessionName (typed), never a bare Error/TypeError", () => {
+      try {
+        validateNamePart("name", `x${String.fromCharCode(0)}y`);
+        throw new Error("did not throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(InvalidSessionName);
+      }
+    });
+  });
+
   describe("accepts well-formed names", () => {
     const cases = ["a", "my-job", "my_job", "JOB-42", "agent-2026", "a-b-c-d-e"];
     for (const value of cases) {

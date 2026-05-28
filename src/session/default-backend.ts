@@ -3,14 +3,26 @@ import { defaultSocketName } from "../backends/tmux/socket.js";
 import type { Backend } from "../backends/types.js";
 
 /**
- * Resolve the socket name from the environment, falling back to the
- * substrate's default. Lives in this bootstrap module so the backend layer
- * (`backends/tmux/socket.ts`) stays a pure function — env composition is a
- * bootstrap concern, not a backend concern.
+ * Single-source socket-name resolution. Precedence (highest first):
+ *
+ *   `explicit` (`--socket` flag) > `CLAUDEMUX_SOCKET` env > `defaultSocketName()`
+ *
+ * Every candidate is **trimmed**, and the trimmed value is what's both gated
+ * AND returned — so `" claudemux "` resolves to the same socket as the bare
+ * default, instead of a silently-divergent `-L ' claudemux '` server that
+ * re-opens the cross-process rendezvous bug the P0 fix closed (QA P2,
+ * [[decisions/0006-default-backend-rendezvous-identity]]). A whitespace-only
+ * value is treated as "not set" and falls through to the next candidate.
+ *
+ * Lives in this bootstrap module so the backend leaf
+ * (`backends/tmux/socket.ts`) stays a pure function — env/flag composition
+ * is a bootstrap concern, not a backend concern.
  */
-function resolveSocketFromEnv(): string {
-  const fromEnv = process.env.CLAUDEMUX_SOCKET;
-  if (fromEnv !== undefined && fromEnv.trim() !== "") return fromEnv;
+export function resolveSocket(explicit?: string): string {
+  const fromFlag = explicit?.trim();
+  if (fromFlag) return fromFlag;
+  const fromEnv = process.env.CLAUDEMUX_SOCKET?.trim();
+  if (fromEnv) return fromEnv;
   return defaultSocketName();
 }
 
@@ -32,7 +44,7 @@ let cached: Backend | null = null;
 
 export function sharedDefaultBackend(): Backend {
   if (cached === null) {
-    cached = tmuxBackend({ socket: resolveSocketFromEnv() });
+    cached = tmuxBackend({ socket: resolveSocket() });
   }
   return cached;
 }

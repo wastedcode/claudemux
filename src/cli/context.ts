@@ -2,7 +2,11 @@ import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend } from "../backends/types.js";
 import { DEFAULT_NAMESPACE } from "../session/constants.js";
-import { backendWithSocket, sharedDefaultBackend } from "../session/default-backend.js";
+import {
+  backendWithSocket,
+  resolveSocket,
+  sharedDefaultBackend,
+} from "../session/default-backend.js";
 import { attachHandle } from "../session/handle.js";
 import type { SessionHandle } from "../types.js";
 
@@ -38,13 +42,16 @@ export function resolveNamespace(name: string | undefined): string {
 }
 
 /**
- * Resolve the backend for this CLI invocation. If `--socket` was passed,
- * builds a fresh backend on that socket; otherwise returns the
- * process-wide shared default (which itself honors `CLAUDEMUX_SOCKET`).
+ * Resolve the backend for this CLI invocation. If `--socket` was passed
+ * (and is non-empty after trimming), builds a fresh backend on the
+ * resolved socket; otherwise returns the process-wide shared default
+ * (which itself honors `CLAUDEMUX_SOCKET`). The trim → gate-and-return
+ * consistency lives in `resolveSocket` so a padded `--socket ' x '` lands
+ * on the same server as `--socket x`.
  */
 export function backend(opts: CommonOpts = {}): Backend {
-  if (opts.socket !== undefined && opts.socket.trim() !== "") {
-    return backendWithSocket(opts.socket);
+  if (opts.socket?.trim()) {
+    return backendWithSocket(resolveSocket(opts.socket));
   }
   return sharedDefaultBackend();
 }

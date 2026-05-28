@@ -81,6 +81,5 @@ describe("wedged tmux (process alive, never returns) → BackendUnreachable[time
     expect((err as BackendUnreachable).kind).toBe("timeout");
     // Settled near the timeout, not after the shim's 30s sleep.
     expect(elapsed).toBeLessThan(3_000);
-  }, // Test-level guard: if the timeout regresses, this fails loud (not hangs).
-  10_000);
+  }, 10_000); // Test-level guard: if the timeout regresses, this fails loud (not hangs).
 });

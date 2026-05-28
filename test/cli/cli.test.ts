@@ -96,6 +96,37 @@ describe("CLI — exists / list / kill against empty server", () => {
   });
 });
 
+describe("CLI — reserved-char names honor each verb's contract (QA P1 7360b35b)", () => {
+  // exists/kill are total query/idempotent verbs: a reserved-char name can't
+  // name a live session, so they must answer cleanly, NOT throw
+  // InvalidSessionName. spawn rejects (mutating entry).
+  it("exists '<reserved>' prints 'false' and exits 1 (no InvalidSessionName throw)", async () => {
+    const r = await runCli(["exists", "a.b"]);
+    expect(r.exit).toBe(1);
+    expect(r.stdout.trim()).toBe("false");
+    expect(r.stderr).not.toContain("invalid name");
+  });
+
+  it("exists '<colon-name>' likewise total", async () => {
+    const r = await runCli(["exists", "has:colon"]);
+    expect(r.exit).toBe(1);
+    expect(r.stdout.trim()).toBe("false");
+  });
+
+  it("kill '<reserved>' is idempotent — exit 0, no throw", async () => {
+    const r = await runCli(["kill", "gone.session"]);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("invalid name");
+  });
+
+  it("spawn '<reserved>' rejects with InvalidSessionName (mutating entry)", async () => {
+    const r = await runCli(["spawn", "a.b", "--cwd", h.sandbox.home, "--boot-timeout-ms", "1000"]);
+    expect(r.exit).not.toBe(0);
+    expect(r.stderr).toContain("invalid name");
+    expect(r.stderr).toContain("a.b");
+  });
+});
+
 describe("CLI — unknown agent surfaces a typed error", () => {
   it("--agent foo exits non-zero with a clear message", async () => {
     // `state` accepts --agent (kill/list/exists don't classify so they don't).
