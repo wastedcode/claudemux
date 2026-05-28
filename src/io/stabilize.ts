@@ -1,4 +1,4 @@
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 
 /**
  * "Pane unchanged for windowMs" probe. Captures the bottom-N pane region at
@@ -17,7 +17,7 @@ export interface StabilizeResult {
 
 export async function stabilize(
   backend: Backend,
-  target: string,
+  ref: SessionRef,
   opts: {
     /** Bottom-N lines to capture. */
     lines: number;
@@ -30,7 +30,7 @@ export async function stabilize(
   },
 ): Promise<StabilizeResult> {
   const start = Date.now();
-  let lastText = await backend.capture(target, { lines: opts.lines });
+  let lastText = await backend.capture(ref, { lines: opts.lines });
   let unchangedSince = Date.now();
 
   while (Date.now() - start < opts.timeoutMs) {
@@ -38,7 +38,7 @@ export async function stabilize(
       return { stable: true, text: lastText };
     }
     await new Promise((res) => setTimeout(res, opts.pollMs));
-    const now = await backend.capture(target, { lines: opts.lines });
+    const now = await backend.capture(ref, { lines: opts.lines });
     if (now !== lastText) {
       lastText = now;
       unchangedSince = Date.now();

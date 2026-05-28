@@ -1,5 +1,5 @@
 import type { AgentDef, BootDialog } from "../agents/types.js";
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 import { DialogStuck, LoginRequired, ReplTimeout } from "../errors.js";
 
 /**
@@ -27,6 +27,11 @@ const BOTTOM_N_LINES = 50;
  */
 const DIALOG_ADVANCE_BUDGET_MS = 5_000;
 
+/** Render a SessionRef into the typed-error session-name slot. */
+function refLabel(ref: SessionRef): string {
+  return `${ref.namespace}--${ref.name}`;
+}
+
 /**
  * Boot the session: dismiss any matching dialogs in order, then wait for
  * the agent's ready predicate. Throws on the three documented failures.
@@ -40,7 +45,7 @@ const DIALOG_ADVANCE_BUDGET_MS = 5_000;
 export async function bootSession(
   backend: Backend,
   agent: AgentDef,
-  target: string,
+  ref: SessionRef,
   opts: { timeoutMs?: number } = {},
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
@@ -48,17 +53,17 @@ export async function bootSession(
 
   while (true) {
     if (Date.now() - start > timeoutMs) {
-      throw new ReplTimeout(target, timeoutMs);
+      throw new ReplTimeout(refLabel(ref), timeoutMs);
     }
-    const text = await backend.capture(target, { lines: BOTTOM_N_LINES });
+    const text = await backend.capture(ref, { lines: BOTTOM_N_LINES });
 
     // Try every dialog matcher in order — the first that fires wins.
     const matched = agent.boot.dialogs.find((d) => d.matches(text));
     if (matched) {
-      await respondToDialog(backend, target, matched);
+      await respondToDialog(backend, ref, matched);
       // Wait for the pane to advance past the matched dialog. If it stays,
       // either the response didn't land or the matcher misfired on history.
-      await waitForAdvancement(backend, agent, target, matched, text);
+      await waitForAdvancement(backend, ref, matched);
       continue; // re-evaluate from the top
     }
 
@@ -78,22 +83,22 @@ export async function bootSession(
  */
 async function respondToDialog(
   backend: Backend,
-  target: string,
+  ref: SessionRef,
   dialog: BootDialog,
 ): Promise<void> {
   if (dialog.respond.kind === "throw") {
     if (dialog.respond.errorClass === "LoginRequired") {
-      throw new LoginRequired(target);
+      throw new LoginRequired(refLabel(ref));
     }
     // Future error classes go here; v0.0.1 has only LoginRequired.
-    throw new LoginRequired(target);
+    throw new LoginRequired(refLabel(ref));
   }
   const key = dialog.respond.key;
-  await backend.send(target, { kind: "key", key });
+  await backend.send(ref, { kind: "key", key });
   // Numeric/letter dialog responses (1, 2, y, n) typically need an Enter
   // to submit; Enter is its own submit, so no follow-up needed there.
   if (key !== "Enter") {
-    await backend.send(target, { kind: "key", key: "Enter" });
+    await backend.send(ref, { kind: "key", key: "Enter" });
   }
 }
 
@@ -104,17 +109,14 @@ async function respondToDialog(
  */
 async function waitForAdvancement(
   backend: Backend,
-  agent: AgentDef,
-  target: string,
+  ref: SessionRef,
   matched: BootDialog,
-  _priorText: string,
 ): Promise<void> {
-  void agent; // agent reserved for future use
   const start = Date.now();
   while (Date.now() - start < DIALOG_ADVANCE_BUDGET_MS) {
     await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
-    const now = await backend.capture(target, { lines: BOTTOM_N_LINES });
+    const now = await backend.capture(ref, { lines: BOTTOM_N_LINES });
     if (!matched.matches(now)) return;
   }
-  throw new DialogStuck(target, matched.id);
+  throw new DialogStuck(refLabel(ref), matched.id);
 }

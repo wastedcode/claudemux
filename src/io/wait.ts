@@ -1,5 +1,5 @@
 import type { AgentDef } from "../agents/types.js";
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 import { ReplTimeout } from "../errors.js";
 import { classify } from "../state/classifier.js";
 import type { IdleState, ReadyOpts } from "../types.js";
@@ -40,7 +40,7 @@ interface WaitDeps {
 export async function waitForState(
   backend: Backend,
   agent: AgentDef,
-  target: string,
+  ref: SessionRef,
   opts: ReadyOpts,
   deps: WaitDeps = { stabilize: defaultStabilize },
 ): Promise<IdleState> {
@@ -49,10 +49,10 @@ export async function waitForState(
 
   while (true) {
     if (Date.now() - start > timeoutMs) {
-      throw new ReplTimeout(target, timeoutMs);
+      throw new ReplTimeout(`${ref.namespace}--${ref.name}`, timeoutMs);
     }
 
-    const text = await backend.capture(target, { lines: CLASSIFIER_BOTTOM_N });
+    const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
     const state = classify(text, agent.rules);
 
     // Dialog and permission-prompt return immediately — they are actionable
@@ -61,17 +61,14 @@ export async function waitForState(
     if (state === "permission-prompt") return "permission-prompt";
 
     if (state === "idle") {
-      // Confirm idle by holding the pane stable for the stabilization window.
-      // Streaming output mid-turn shouldn't false-positive as idle.
       const remaining = Math.max(0, timeoutMs - (Date.now() - start));
-      const r: StabilizeResult = await deps.stabilize(backend, target, {
+      const r: StabilizeResult = await deps.stabilize(backend, ref, {
         lines: CLASSIFIER_BOTTOM_N,
         windowMs: IDLE_STABLE_WINDOW_MS,
         pollMs: POLL_MS,
         timeoutMs: Math.min(remaining, IDLE_STABLE_WINDOW_MS * 4),
       });
       if (r.stable && agent.rules.idle(r.text)) return "idle";
-      // Pane changed — fall through and re-classify.
       continue;
     }
 

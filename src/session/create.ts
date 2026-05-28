@@ -1,10 +1,10 @@
 import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import { targetOf } from "../backends/tmux/sessions.js";
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 import { SessionExists } from "../errors.js";
 import type { SessionHandle } from "../types.js";
 import { bootSession } from "./boot.js";
+import { DEFAULT_NAMESPACE } from "./constants.js";
 import { sharedDefaultBackend } from "./default-backend.js";
 import { makeHandle } from "./handle.js";
 
@@ -53,15 +53,15 @@ export interface CreateOptions {
  * ```
  */
 export async function create(opts: CreateOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? "claudemux";
+  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
   const agent = opts.agent ?? defaultAgent;
   const backend = opts.backend ?? sharedDefaultBackend();
-  const target = targetOf(namespace, opts.name);
+  const ref: SessionRef = { namespace, name: opts.name };
 
   // Exists-check first. Never silently adopt an existing session — that is
   // the lifecycle-policy footgun claudemux explicitly avoids.
-  if (await backend.exists(target)) {
-    throw new SessionExists(target);
+  if (await backend.exists(ref)) {
+    throw new SessionExists(`${namespace}--${opts.name}`);
   }
 
   const argvBuild = agent.buildArgv({
@@ -79,13 +79,11 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
   });
 
   try {
-    await bootSession(backend, agent, target, {
+    await bootSession(backend, agent, ref, {
       ...(opts.bootTimeoutMs === undefined ? {} : { timeoutMs: opts.bootTimeoutMs }),
     });
   } catch (err) {
-    // Boot failed — best-effort teardown so we don't leak the half-booted
-    // session. kill() is idempotent so this is safe.
-    await backend.kill(target).catch(() => undefined);
+    await backend.kill(ref).catch(() => undefined);
     throw err;
   }
 

@@ -1,4 +1,4 @@
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 
 /**
  * Deliver `text` as one logical user turn: a `paste` of the body, then a
@@ -14,7 +14,7 @@ import type { Backend } from "../backends/types.js";
  * (submit) from pasted `\n` (literal newline). Folding submission into the
  * paste body would re-introduce the per-line-submit failure mode.
  */
-export async function sendOnce(backend: Backend, target: string, text: string): Promise<void> {
-  await backend.send(target, { kind: "paste", text });
-  await backend.send(target, { kind: "key", key: "Enter" });
+export async function sendOnce(backend: Backend, ref: SessionRef, text: string): Promise<void> {
+  await backend.send(ref, { kind: "paste", text });
+  await backend.send(ref, { kind: "key", key: "Enter" });
 }

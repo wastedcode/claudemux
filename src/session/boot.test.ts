@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, BackendEvent, SendPayload } from "../backends/types.js";
+import type { Backend, BackendEvent, SendPayload, SessionRef } from "../backends/types.js";
 import { DialogStuck, LoginRequired, ReplTimeout } from "../errors.js";
 import { bootSession } from "./boot.js";
 
@@ -27,23 +27,23 @@ class FakeBackend implements Backend {
   spawn(): Promise<void> {
     return Promise.resolve();
   }
-  kill(): Promise<void> {
+  kill(_ref: SessionRef): Promise<void> {
     return Promise.resolve();
   }
-  exists(): Promise<boolean> {
+  exists(_ref: SessionRef): Promise<boolean> {
     return Promise.resolve(true);
   }
-  list(): Promise<string[]> {
+  list(_namespace: string): Promise<string[]> {
     return Promise.resolve([]);
   }
-  send(_name: string, payload: SendPayload): Promise<void> {
+  send(_ref: SessionRef, payload: SendPayload): Promise<void> {
     this.sent.push(payload);
     // Advance to the next stage on each send (paste-and-Enter both count;
     // boot's response loop sends one key per dialog response in tests).
     this.stageIdx = Math.min(this.stageIdx + 1, this.stages.length - 1);
     return Promise.resolve();
   }
-  capture(): Promise<string> {
+  capture(_ref: SessionRef): Promise<string> {
     return Promise.resolve(this.peek());
   }
   onCommand(_h: (e: BackendEvent) => void): () => void {
@@ -71,7 +71,9 @@ describe("bootSession — happy paths", () => {
   it("returns when isReady fires and no dialog has matched", async () => {
     const fb = new FakeBackend(["READY"]);
     const agent = stubAgent([]);
-    await expect(bootSession(fb, agent, "tgt", { timeoutMs: 5_000 })).resolves.toBeUndefined();
+    await expect(
+      bootSession(fb, agent, { namespace: "ns", name: "tgt" }, { timeoutMs: 5_000 }),
+    ).resolves.toBeUndefined();
     expect(fb.sent).toEqual([]); // no dialogs touched
   });
 
@@ -84,7 +86,7 @@ describe("bootSession — happy paths", () => {
         respond: { kind: "key", key: "Enter" },
       },
     ]);
-    await bootSession(fb, agent, "tgt", { timeoutMs: 5_000 });
+    await bootSession(fb, agent, { namespace: "ns", name: "tgt" }, { timeoutMs: 5_000 });
     expect(fb.sent).toEqual([{ kind: "key", key: "Enter" }]);
   });
 
@@ -97,7 +99,7 @@ describe("bootSession — happy paths", () => {
         respond: { kind: "key", key: "1" },
       },
     ]);
-    await bootSession(fb, agent, "tgt", { timeoutMs: 5_000 });
+    await bootSession(fb, agent, { namespace: "ns", name: "tgt" }, { timeoutMs: 5_000 });
     expect(fb.sent).toEqual([
       { kind: "key", key: "1" },
       { kind: "key", key: "Enter" },
@@ -115,9 +117,9 @@ describe("bootSession — error paths", () => {
         respond: { kind: "throw", errorClass: "LoginRequired" },
       },
     ]);
-    await expect(bootSession(fb, agent, "sess", { timeoutMs: 5_000 })).rejects.toThrow(
-      LoginRequired,
-    );
+    await expect(
+      bootSession(fb, agent, { namespace: "ns", name: "sess" }, { timeoutMs: 5_000 }),
+    ).rejects.toThrow(LoginRequired);
   });
 
   it("throws DialogStuck when a recognized dialog persists past the response", async () => {
@@ -131,7 +133,12 @@ describe("bootSession — error paths", () => {
       },
     ]);
     // Set boot timeout > dialog-advance budget so DialogStuck (not ReplTimeout) fires.
-    const err = await bootSession(fb, agent, "sess", { timeoutMs: 30_000 }).catch((e) => e);
+    const err = await bootSession(
+      fb,
+      agent,
+      { namespace: "ns", name: "sess" },
+      { timeoutMs: 30_000 },
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(DialogStuck);
     expect((err as DialogStuck).dialogId).toBe("stuck");
   });
@@ -139,7 +146,9 @@ describe("bootSession — error paths", () => {
   it("throws ReplTimeout when the pane never reaches a dialog or ready state", async () => {
     const fb = new FakeBackend(["random output that matches nothing"]);
     const agent = stubAgent([]);
-    await expect(bootSession(fb, agent, "sess", { timeoutMs: 500 })).rejects.toThrow(ReplTimeout);
+    await expect(
+      bootSession(fb, agent, { namespace: "ns", name: "sess" }, { timeoutMs: 500 }),
+    ).rejects.toThrow(ReplTimeout);
   });
 });
 
@@ -150,7 +159,7 @@ describe("bootSession — multi-dialog ordering", () => {
       { id: "a", matches: (t) => t.includes("A_"), respond: { kind: "key", key: "Enter" } },
       { id: "b", matches: (t) => t.includes("B_"), respond: { kind: "key", key: "Enter" } },
     ]);
-    await bootSession(fb, agent, "tgt", { timeoutMs: 5_000 });
+    await bootSession(fb, agent, { namespace: "ns", name: "tgt" }, { timeoutMs: 5_000 });
     // Two Enter sends (one for "a", one for "b").
     expect(fb.sent).toEqual([
       { kind: "key", key: "Enter" },

@@ -35,7 +35,7 @@ describe("create() — SessionExists collision", () => {
       }),
     ).rejects.toThrow(SessionExists);
 
-    await backend.kill("claudemux--collide");
+    await backend.kill({ namespace: "claudemux", name: "collide" });
   });
 });
 
@@ -61,7 +61,7 @@ describe("create() — pre-auth boot path against real claude (LoginRequired cle
     ).rejects.toThrow(LoginRequired);
 
     // create() best-effort kills the session on boot failure — verify gone.
-    const exists = await backend.exists("claudemux--preauth");
+    const exists = await backend.exists({ namespace: "claudemux", name: "preauth" });
     expect(exists).toBe(false);
   }, 60_000);
 });

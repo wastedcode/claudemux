@@ -1,6 +1,5 @@
 import type { AgentDef } from "../agents/types.js";
-import { targetOf } from "../backends/tmux/sessions.js";
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForState } from "../io/wait.js";
@@ -28,28 +27,26 @@ interface HandleDeps {
  * concurrent consumer calls cannot interleave bytes.
  */
 export function makeHandle(deps: HandleDeps): SessionHandle {
-  const target = targetOf(deps.namespace, deps.name);
+  const ref: SessionRef = { namespace: deps.namespace, name: deps.name };
   const mutex = new Mutex();
 
   return {
     name: deps.name,
     namespace: deps.namespace,
-    send: (text) => mutex.run(() => sendOnce(deps.backend, target, text)),
+    send: (text) => mutex.run(() => sendOnce(deps.backend, ref, text)),
     wait: (opts?: ReadyOpts) =>
-      mutex.run(() => waitForState(deps.backend, deps.agent, target, opts ?? {}, { stabilize })),
-    state: () => mutex.run(() => readState(deps.backend, deps.agent, target)),
-    capture: (opts) => mutex.run(() => deps.backend.capture(target, opts)),
-    kill: () => mutex.run(() => deps.backend.kill(target)),
+      mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
+    state: () => mutex.run(() => readState(deps.backend, deps.agent, ref)),
+    capture: (opts) => mutex.run(() => deps.backend.capture(ref, opts)),
+    kill: () => mutex.run(() => deps.backend.kill(ref)),
     onBackendCommand: (handler: (event: BackendCommandEvent) => void) =>
       deps.backend.onCommand(handler),
   };
 }
 
-async function readState(backend: Backend, agent: AgentDef, target: string): Promise<State> {
-  const text = await backend.capture(target, { lines: CLASSIFIER_BOTTOM_N });
+async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Promise<State> {
+  const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
   return classify(text, agent.rules);
 }
 
-// Re-export IdleState so callers building on this module can import without
-// double-imports.
 export type { IdleState };

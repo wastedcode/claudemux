@@ -35,6 +35,18 @@ export type SendPayload =
   | { kind: "key"; key: "Enter" | "Escape" | "1" | "2" | "y" | "n" };
 
 /**
+ * Identifier for one named session. Every Backend method takes this shape
+ * so the backend owns its own naming convention — callers never construct
+ * `<namespace>--<name>` or any other concrete encoding. Future backends
+ * (node-pty, CustomPaneBackend) implement the same interface and may
+ * encode the pair differently internally.
+ */
+export interface SessionRef {
+  namespace: string;
+  name: string;
+}
+
+/**
  * The substrate's view of one named pane in a backend. Implemented by
  * `src/backends/tmux/index.ts` for v0.0.1; future backends (node-pty,
  * `CustomPaneBackend`) implement the same interface.
@@ -44,33 +56,33 @@ export interface Backend {
   readonly id: string;
 
   /** Create a named session running `cmd` + `argv` in `cwd`. */
-  spawn(o: {
-    namespace: string;
-    name: string;
-    cwd: string;
-    env?: Record<string, string>;
-    cmd: string;
-    argv: string[];
-  }): Promise<void>;
+  spawn(
+    o: SessionRef & {
+      cwd: string;
+      env?: Record<string, string>;
+      cmd: string;
+      argv: string[];
+    },
+  ): Promise<void>;
 
   /** Kill the named session. Idempotent — kill of a missing session is success. */
-  kill(name: string): Promise<void>;
+  kill(ref: SessionRef): Promise<void>;
 
   /** Whether the named session is alive. */
-  exists(name: string): Promise<boolean>;
+  exists(ref: SessionRef): Promise<boolean>;
 
-  /** List session names owned by `namespace`. */
+  /** List short session names owned by `namespace`. */
   list(namespace: string): Promise<string[]>;
 
   /** Send one payload to the named session. */
-  send(name: string, payload: SendPayload): Promise<void>;
+  send(ref: SessionRef, payload: SendPayload): Promise<void>;
 
   /**
    * Return the named session's pane text.
    * @param o.ansi — preserve escape sequences when `true`.
    * @param o.lines — return only the bottom-N lines (default: full visible region).
    */
-  capture(name: string, o?: { ansi?: boolean; lines?: number }): Promise<string>;
+  capture(ref: SessionRef, o?: { ansi?: boolean; lines?: number }): Promise<string>;
 
   /** Subscribe to every backend command + result. Returns an unsubscribe fn. */
   onCommand(handler: (e: BackendEvent) => void): () => void;

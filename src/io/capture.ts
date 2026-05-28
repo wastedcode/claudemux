@@ -1,4 +1,4 @@
-import type { Backend } from "../backends/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
 
 /**
  * Pure pass-through to `Backend.capture`. Lives in `src/io/` because the
@@ -11,8 +11,8 @@ import type { Backend } from "../backends/types.js";
  */
 export function captureOnce(
   backend: Backend,
-  target: string,
+  ref: SessionRef,
   opts?: { ansi?: boolean; lines?: number },
 ): Promise<string> {
-  return backend.capture(target, opts);
+  return backend.capture(ref, opts);
 }
