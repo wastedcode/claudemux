@@ -1,3 +1,5 @@
+import { type TmuxExec, classifyTmuxFailure } from "./exec.js";
+
 /**
  * Argv chunks that set the substrate's four server-global tmux options.
  * Joined into a multi-command invocation in front of `new-session` so the
@@ -37,4 +39,58 @@ export function serverOptionsArgv(): string[] {
     out.push(...cmd, ";");
   }
   return out;
+}
+
+/**
+ * Map a backend-neutral session-meta key to a tmux **session user option**.
+ * User option names must begin with `@`; we further namespace under
+ * `@claudemux-` so the substrate's keys never collide with a consumer's own
+ * tmux options on the shared server.
+ */
+function userOptionName(key: string): string {
+  return `@claudemux-${key}`;
+}
+
+/**
+ * Persist a session-scoped key/value as a tmux user option on `target`. The
+ * value is passed as a single argv element (no shell), so no escaping is
+ * needed. The option lives with the session and is dropped when the session
+ * is killed — no cleanup required.
+ */
+export async function setSessionOption(
+  exec: TmuxExec,
+  target: string,
+  key: string,
+  value: string,
+  label: string = target,
+): Promise<void> {
+  const args = ["set-option", "-t", target, userOptionName(key), value];
+  const r = await exec.run(args, { sessionName: label });
+  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
+  if (err) throw err;
+}
+
+/**
+ * Read a session user option previously set via {@link setSessionOption}.
+ * Returns `undefined` when the option is unset or the session/server is
+ * unreadable — this is best-effort metadata, never a hard error. `-v` prints
+ * just the value; an unset user option yields empty output (trimmed → unset).
+ */
+export async function getSessionOption(
+  exec: TmuxExec,
+  target: string,
+  key: string,
+  label: string = target,
+): Promise<string | undefined> {
+  let r: Awaited<ReturnType<TmuxExec["run"]>>;
+  try {
+    r = await exec.run(["show-options", "-t", target, "-v", userOptionName(key)], {
+      sessionName: label,
+    });
+  } catch {
+    return undefined; // session gone / no server / wedged — treat as "unset"
+  }
+  if (r.exit !== 0) return undefined;
+  const v = r.stdout.trim();
+  return v.length > 0 ? v : undefined;
 }

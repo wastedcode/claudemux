@@ -46,6 +46,12 @@ class FakeBackend implements Backend {
   capture(_ref: SessionRef): Promise<string> {
     return Promise.resolve(this.peek());
   }
+  setSessionMeta(): Promise<void> {
+    return Promise.resolve();
+  }
+  getSessionMeta(): Promise<string | undefined> {
+    return Promise.resolve(undefined);
+  }
   onCommand(_h: (e: BackendEvent) => void): () => void {
     return () => undefined;
   }
@@ -211,6 +217,8 @@ describe("bootSession — premature-ready guard (stabilize gate)", () => {
         // First few captures flap (rendering); then settle to a stable ready.
         return Promise.resolve(calls < 4 ? `render-${calls} READY` : "settled READY");
       },
+      setSessionMeta: () => Promise.resolve(),
+      getSessionMeta: () => Promise.resolve(undefined),
       onCommand: () => () => undefined,
     };
     const agent = stubAgent([]);

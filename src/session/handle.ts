@@ -27,7 +27,7 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
   return {
     name: deps.name,
     namespace: deps.namespace,
-    send: (text) => mutex.run(() => sendOnce(deps.backend, ref, text)),
+    send: (text) => mutex.run(() => sendOnce(deps.backend, deps.agent, ref, text)),
     wait: (opts?: ReadyOpts) =>
       mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
     state: () => mutex.run(() => readState(deps.backend, deps.agent, ref)),

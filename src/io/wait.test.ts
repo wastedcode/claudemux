@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, BackendEvent, SessionRef } from "../backends/types.js";
+import { SEND_BASELINE_KEY, paneFingerprint } from "./baseline.js";
 import { stabilize } from "./stabilize.js";
 import { waitForState } from "./wait.js";
 
@@ -18,18 +19,32 @@ const READY = "❯ ";
 const WORKING = "✻ Working… (esc to interrupt)";
 const DONE = "the answer is 42\n❯ ";
 
-/** A backend whose `capture` walks a fixed frame list, repeating the last. */
+/**
+ * A backend whose `capture` walks a fixed frame list, repeating the last.
+ * `baseline` (optional) is the fingerprint a prior `send` would have stashed —
+ * `getSessionMeta(SEND_BASELINE_KEY)` returns it, driving wait's cross-process
+ * arm. Omit it to exercise the observed-working (in-process) arm path.
+ */
 class FrameBackend implements Backend {
   readonly id = "frames";
   #i = 0;
-  constructor(private frames: string[]) {}
+  constructor(
+    private frames: string[],
+    private baseline?: string,
+  ) {}
 
   capture(_ref: SessionRef): Promise<string> {
     const frame = this.frames[Math.min(this.#i, this.frames.length - 1)] ?? "";
     this.#i++;
     return Promise.resolve(frame);
   }
+  getSessionMeta(_ref: SessionRef, key: string): Promise<string | undefined> {
+    return Promise.resolve(key === SEND_BASELINE_KEY ? this.baseline : undefined);
+  }
   // Unused by waitForState:
+  setSessionMeta(): Promise<void> {
+    return Promise.resolve();
+  }
   spawn(): Promise<void> {
     return Promise.resolve();
   }
@@ -102,10 +117,10 @@ describe("waitForState — transition-aware (the send→wait race)", () => {
   it("does NOT return on the post-submit empty prompt that precedes working", async () => {
     // The real claude 2.1.153 timeline after Enter: the input box clears to
     // an EMPTY `❯ ` (idle-looking) for ≤200ms BEFORE `esc to interrupt`
-    // appears. arm-on-observed-working means this leading empty idle is not a
-    // premature return — even though it's the very first frame. (A
-    // baseline-differs arm would have fired here and returned early; we
-    // dropped it for exactly this reason.)
+    // appears. With no baseline stashed, arm-on-observed-working means this
+    // leading empty idle is not a premature return — even though it's the very
+    // first frame. (The cross-process baseline arm — exercised below — would
+    // also not fire here, because the baseline IS this post-submit frame.)
     const backend = new FrameBackend([READY, WORKING, WORKING, DONE]);
     const r = await waitForState(backend, agent, ref, { timeoutMs: 5_000 }, { stabilize });
     expect(r).toBe("idle");
@@ -120,5 +135,52 @@ describe("waitForState — transition-aware (the send→wait race)", () => {
     const backend = new FrameBackend(["DIALOG: choose a theme"]);
     const r = await waitForState(backend, dialogAgent, ref, { timeoutMs: 5_000 }, { stabilize });
     expect(r).toBe("dialog");
+  });
+});
+
+/**
+ * P1 (8a500a52) — the stateless-CLI fast-turn hang. `send` and `wait` are
+ * separate CLI processes; a fast turn can be back to idle before the `wait`
+ * process takes its first capture, so `wait` never observes a `working` frame.
+ * Without a cross-process baseline it then waits out the full budget. `send`
+ * stashes a post-submit fingerprint; `wait` arms when the live pane diverges
+ * from it. The baseline is the *post-submit* frame, so the dangerous pre-answer
+ * window (live pane == baseline) is NOT a divergence → no premature return.
+ */
+describe("waitForState — cross-process baseline arm (stateless CLI fast turn)", () => {
+  const POST_SUBMIT = "you asked: ping\n❯ ";
+
+  it("arms on divergence when the turn already completed before the first poll (no working seen)", async () => {
+    // The bug: only DONE frames are ever observed (the turn finished in the
+    // send→wait process gap). With the post-submit baseline, DONE diverges from
+    // it → wait arms and returns idle instead of hanging to ReplTimeout.
+    const backend = new FrameBackend([DONE], paneFingerprint(POST_SUBMIT));
+    const r = await waitForState(backend, agent, ref, { timeoutMs: 5_000 }, { stabilize });
+    expect(r).toBe("idle");
+    expect(await backend.capture(ref)).toContain("the answer is 42");
+  });
+
+  it("does NOT arm while the live pane still equals the post-submit baseline", async () => {
+    // wait starts inside the post-submit window (live pane == baseline): it must
+    // NOT arm on those leading idle frames (that would return the previous
+    // turn's answer). It arms only once the pane diverges — here when `working`
+    // appears — and returns the DONE idle.
+    const backend = new FrameBackend(
+      [POST_SUBMIT, POST_SUBMIT, WORKING, DONE],
+      paneFingerprint(POST_SUBMIT),
+    );
+    const r = await waitForState(backend, agent, ref, { timeoutMs: 5_000 }, { stabilize });
+    expect(r).toBe("idle");
+    expect(await backend.capture(ref)).toContain("the answer is 42");
+  });
+
+  it("times out if the live pane never diverges from the baseline (agent never reacted)", async () => {
+    // A baseline that matches the live idle forever must NOT falsely arm — the
+    // turn genuinely never ran, so wait correctly times out rather than
+    // returning a stale idle.
+    const backend = new FrameBackend([POST_SUBMIT], paneFingerprint(POST_SUBMIT));
+    await expect(
+      waitForState(backend, agent, ref, { timeoutMs: 400 }, { stabilize }),
+    ).rejects.toThrow(/did not settle/);
   });
 });

@@ -10,6 +10,7 @@ import {
 import { capturePane } from "./capture.js";
 import { TmuxExec } from "./exec.js";
 import { pasteText, sendKey } from "./keys.js";
+import { getSessionOption, setSessionOption } from "./options.js";
 import { hasSession, killSession, listSessions, newSession, targetOf } from "./sessions.js";
 
 /**
@@ -94,6 +95,17 @@ export function tmuxBackend(opts: { socket: string }): Backend {
     capture: async (ref, o) => {
       const { target, label } = refToTarget(ref);
       return capturePane(exec, target, { ...o, label });
+    },
+    setSessionMeta: async (ref, key, value) => {
+      const { target, label } = refToTarget(ref);
+      await setSessionOption(exec, target, key, value, label);
+    },
+    getSessionMeta: async (ref, key) => {
+      // Total/best-effort, like exists/kill: an invalid name can't name a live
+      // session, so it has no metadata — return undefined rather than throw.
+      const t = tryRefToTarget(ref);
+      if (t === null) return undefined;
+      return getSessionOption(exec, t.target, key, t.label);
     },
     onCommand: (h: (e: BackendEvent) => void) => exec.onCommand(h),
   };

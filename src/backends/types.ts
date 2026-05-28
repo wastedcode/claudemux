@@ -97,6 +97,24 @@ export interface Backend {
    */
   capture(ref: SessionRef, o?: { ansi?: boolean; lines?: number }): Promise<string>;
 
+  /**
+   * Persist a small opaque string under a **session-scoped** key. The value
+   * lives and dies with the session. Used for cross-process coordination —
+   * specifically the post-submit pane fingerprint `send()` leaves for a later
+   * (possibly different-process) `wait()` to read. Backend-specific storage
+   * (the tmux backend uses a `@`-prefixed session user option); callers treat
+   * it as an opaque per-session key/value store and never depend on where it
+   * lives.
+   */
+  setSessionMeta(ref: SessionRef, key: string, value: string): Promise<void>;
+
+  /**
+   * Read a value previously written via {@link setSessionMeta}. Returns
+   * `undefined` when the key was never set (or the session/value is
+   * unreadable) — it is metadata, so absence is not an error.
+   */
+  getSessionMeta(ref: SessionRef, key: string): Promise<string | undefined>;
+
   /** Subscribe to every backend command + result. Returns an unsubscribe fn. */
   onCommand(handler: (e: BackendEvent) => void): () => void;
 }

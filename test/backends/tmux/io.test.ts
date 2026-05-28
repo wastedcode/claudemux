@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { capturePane } from "../../../src/backends/tmux/capture.js";
 import { TmuxExec } from "../../../src/backends/tmux/exec.js";
 import { pasteText, sendKey } from "../../../src/backends/tmux/keys.js";
+import { getSessionOption, setSessionOption } from "../../../src/backends/tmux/options.js";
 import { newSession, targetOf } from "../../../src/backends/tmux/sessions.js";
 import { PaneDead, SessionGone } from "../../../src/errors.js";
 import { Harness } from "../../harness/index.js";
@@ -187,5 +188,36 @@ describe("capturePane — bottom-N, ansi, pane-death", () => {
     await new Promise((res) => setTimeout(res, 300));
     await expect(capturePane(exec, target)).rejects.toThrow(PaneDead);
     await exec.run(["kill-session", "-t", target], { sessionName: target });
+  });
+});
+
+describe("session metadata — set/get round-trip (the cross-process send-baseline store)", () => {
+  it("round-trips a value, overwrites it, and returns undefined for an unset key", async () => {
+    await newSession(exec, {
+      namespace: NS,
+      name: "meta1",
+      cwd: h.sandbox.home,
+      cmd: "sleep",
+      argv: ["60"],
+    });
+    const target = targetOf(NS, "meta1");
+    const fp = "deadbeef".repeat(8); // 64-char, sha256-hex shaped
+
+    // Unset → undefined (not an error — it's optional metadata).
+    expect(await getSessionOption(exec, target, "send-baseline")).toBeUndefined();
+    // Set → reads back verbatim.
+    await setSessionOption(exec, target, "send-baseline", fp);
+    expect(await getSessionOption(exec, target, "send-baseline")).toBe(fp);
+    // Overwrite → latest value wins (each send replaces the baseline).
+    await setSessionOption(exec, target, "send-baseline", "cafef00d");
+    expect(await getSessionOption(exec, target, "send-baseline")).toBe("cafef00d");
+
+    await exec.run(["kill-session", "-t", target], { sessionName: target });
+  });
+
+  it("getSessionOption returns undefined for a missing session (best-effort, never throws)", async () => {
+    expect(
+      await getSessionOption(exec, targetOf(NS, "never-existed"), "send-baseline"),
+    ).toBeUndefined();
   });
 });
