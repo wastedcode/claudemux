@@ -48,15 +48,22 @@ export class TmuxExec {
    *   running" on a connect-only operation, etc.). The session-name field
    *   on the typed error is the *requested* session (passed by the caller).
    */
-  async run(args: string[], opts: { sessionName?: string } = {}): Promise<TmuxResult> {
+  async run(
+    args: string[],
+    opts: { sessionName?: string; input?: string } = {},
+  ): Promise<TmuxResult> {
     const fullArgs = ["-L", this.socket, "-f", "/dev/null", ...args];
     const sessionName = opts.sessionName ?? "<unknown>";
     const startedAt = Date.now();
     return new Promise<TmuxResult>((resolve, reject) => {
       const child = spawn("tmux", fullArgs, {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         env: process.env as Record<string, string>,
       });
+      if (opts.input !== undefined && child.stdin) {
+        child.stdin.write(opts.input);
+        child.stdin.end();
+      }
       let stdout = "";
       let stderr = "";
       let spawnErr: Error | null = null;
