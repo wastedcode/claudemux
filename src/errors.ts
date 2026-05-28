@@ -98,16 +98,33 @@ export class SessionGone extends ClaudemuxError {
 }
 
 /**
+ * Discriminates *why* the backend is unreachable. Recovery code branches on
+ * this: `no-server` is a legitimate "nothing is running yet" (query verbs
+ * treat it as absence), whereas `spawn-failed` (binary missing) and
+ * `timeout` (wedged backend) are real faults that must surface loudly — a
+ * missing dependency or a hung process must never masquerade as "no
+ * sessions exist."
+ */
+export type BackendUnreachableKind = "no-server" | "spawn-failed" | "timeout";
+
+/**
  * Thrown when the underlying backend (the agent's I/O substrate) is
- * unreachable — the backend process failed to spawn, its socket is
- * missing, or its server was not running on the requested connection.
+ * unreachable — the backend process failed to spawn (`spawn-failed`), its
+ * server was not running on the requested connection (`no-server`), or a
+ * backend invocation hung past its budget (`timeout`).
  */
 export class BackendUnreachable extends ClaudemuxError {
+  /** Why the backend was unreachable — see {@link BackendUnreachableKind}. */
+  readonly kind: BackendUnreachableKind;
   /** The underlying spawn / connection error, if available. */
   readonly underlying?: Error;
 
-  constructor(sessionName: string, underlying?: Error) {
-    super(`backend unreachable${underlying ? ` (${underlying.message})` : ""}`, sessionName);
+  constructor(sessionName: string, kind: BackendUnreachableKind, underlying?: Error) {
+    super(
+      `backend unreachable [${kind}]${underlying ? ` (${underlying.message})` : ""}`,
+      sessionName,
+    );
+    this.kind = kind;
     if (underlying !== undefined) {
       this.underlying = underlying;
     }

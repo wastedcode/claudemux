@@ -20,7 +20,7 @@ describe("typed errors", () => {
       { err: new LoginRequired("a"), name: "a" },
       { err: new PaneDead("b", 9), name: "b" },
       { err: new SessionGone("c"), name: "c" },
-      { err: new BackendUnreachable("d"), name: "d" },
+      { err: new BackendUnreachable("d", "no-server"), name: "d" },
       {
         err: new BackendError("e", ["tmux", "has-session"], 1, "can't find session: e"),
         name: "e",
@@ -52,11 +52,13 @@ describe("typed errors", () => {
     expect(e.message).toContain("signal 9");
   });
 
-  it("BackendUnreachable optionally wraps an underlying cause", () => {
+  it("BackendUnreachable carries kind + optionally wraps an underlying cause", () => {
     const cause = new Error("ENOENT");
-    const e = new BackendUnreachable("s", cause);
+    const e = new BackendUnreachable("s", "spawn-failed", cause);
+    expect(e.kind).toBe("spawn-failed");
     expect(e.underlying).toBe(cause);
     expect(e.message).toContain("ENOENT");
+    expect(e.message).toContain("spawn-failed");
   });
 
   it("BackendError preserves argv + exit + stderr on fields", () => {

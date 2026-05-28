@@ -1,10 +1,5 @@
 import { BackendUnreachable, SessionGone } from "../../errors.js";
-import {
-  type TmuxExec,
-  classifyTmuxFailure,
-  isNoServerStderr,
-  isSessionGoneStderr,
-} from "./exec.js";
+import { type TmuxExec, classifyTmuxFailure, isSessionGoneStderr } from "./exec.js";
 import { serverOptionsArgv } from "./options.js";
 
 /**
@@ -80,20 +75,21 @@ export async function newSession(
 /**
  * Is the named session currently alive on the server?
  *
- * Returns `false` (never throws) for every shape tmux uses to say "not here":
- *   - `can't find session: …`  (target name doesn't exist at session level)
- *   - `can't find window: …`   (tmux parsed name as `session.window`, no such window)
- *   - `can't find pane: …`     (tmux parsed name as `session.window.pane`, no such pane)
- *   - `no server running on …` / `error connecting to …` (empty/dead server)
+ * Returns `false` (never throws) for "the session isn't here":
+ *   - exit 0 → `true`
+ *   - `can't find session/window/pane: …` (any level of tmux's target
+ *     grammar) → `false`, via `isSessionGoneStderr`. A name that trips the
+ *     `session:window.pane` parser still yields a boolean, not a throw.
+ *   - `no-server` BackendUnreachable (empty/down server) → `false`.
  *
- * The three `can't find` shapes share a single source via `isSessionGoneStderr`;
- * the no-server shapes share via `isNoServerStderr`. Broadening these is
- * what made `exists()` return `false` (not throw) for names containing
- * tmux-reserved characters — see QA P1-1.
+ * It DOES throw `BackendUnreachable` for `spawn-failed` (backend binary
+ * missing) and `timeout` (wedged backend) — those are real faults; a missing
+ * dependency must not masquerade as "no such session." The no-server gate
+ * lives solely in the catch (exec.run rejects no-server before it could
+ * resolve), so there is no dead resolve-path branch here.
  *
  * `label` is the user-facing identifier used in error messages (defaults to
- * `target` for callers who haven't computed the label). Errors thrown
- * from this function carry `label` as the session-name slot, not the tmux
+ * `target`). Errors thrown from this function carry `label`, not the tmux
  * internal target encoding.
  */
 export async function hasSession(
@@ -105,19 +101,20 @@ export async function hasSession(
     const r = await exec.run(["has-session", "-t", target], { sessionName: label });
     if (r.exit === 0) return true;
     if (isSessionGoneStderr(r.stderr)) return false;
-    if (isNoServerStderr(r.stderr)) return false;
     const err = classifyTmuxFailure(label, ["tmux", "has-session", "-t", target], r);
     if (err) throw err;
     return false;
   } catch (err) {
-    if (err instanceof BackendUnreachable) return false;
-    throw err;
+    if (isNoServer(err)) return false; // empty server == no such session
+    throw err; // spawn-failed (binary missing) / timeout (wedged) surface loudly
   }
 }
 
 /**
  * Kill a session by target name. Idempotent — "session was already gone" or
- * "no server running" is treated as success.
+ * "no server running" is treated as success. A *missing backend binary*
+ * (`spawn-failed`) or a *wedged* server (`timeout`) still throws — those are
+ * real faults, not "the session is already gone."
  */
 export async function killSession(
   exec: TmuxExec,
@@ -127,31 +124,31 @@ export async function killSession(
   try {
     const r = await exec.run(["kill-session", "-t", target], { sessionName: label });
     if (r.exit === 0) return;
-    if (isNoServerStderr(r.stderr)) return; // empty server == no session
     const err = classifyTmuxFailure(label, ["tmux", "kill-session", "-t", target], r);
     if (err instanceof SessionGone) return;
     if (err) throw err;
   } catch (err) {
-    if (err instanceof BackendUnreachable) return;
+    if (isNoServer(err)) return; // empty server == no session to kill
     throw err;
   }
 }
 
 /**
- * List session names within `namespace`. Returns the *short* names (the
- * piece after `<namespace>:`), in whatever order tmux reports. An empty
- * list (no sessions at all, OR no server running) returns `[]`.
+ * List the *short* session names within `namespace` (the piece after the
+ * `<namespace>--` prefix), in whatever order tmux reports. A running-but-empty
+ * server, or no server at all, returns `[]`. A missing backend binary or a
+ * wedged server throws `BackendUnreachable` — an empty list must mean "no
+ * sessions," never "we couldn't reach the backend."
  */
 export async function listSessions(exec: TmuxExec, namespace: string): Promise<string[]> {
   let r: Awaited<ReturnType<TmuxExec["run"]>>;
   try {
     r = await exec.run(["list-sessions", "-F", "#{session_name}"], { sessionName: namespace });
   } catch (err) {
-    if (err instanceof BackendUnreachable) return [];
+    if (isNoServer(err)) return [];
     throw err;
   }
   if (r.exit !== 0) {
-    if (isNoServerStderr(r.stderr)) return [];
     if (r.stdout.trim() === "") return [];
     const err = classifyTmuxFailure(namespace, ["tmux", "list-sessions"], r);
     if (err) throw err;
@@ -162,4 +159,14 @@ export async function listSessions(exec: TmuxExec, namespace: string): Promise<s
     .map((line) => line.trim())
     .filter((line) => line.startsWith(prefix))
     .map((line) => line.slice(prefix.length));
+}
+
+/**
+ * True only for the `no-server` flavor of `BackendUnreachable` — a
+ * legitimately-empty/down server, which query/idempotent verbs treat as
+ * "absence." `spawn-failed` (binary missing) and `timeout` (wedged) are
+ * real faults that must propagate, so they are NOT swallowed here.
+ */
+function isNoServer(err: unknown): boolean {
+  return err instanceof BackendUnreachable && err.kind === "no-server";
 }

@@ -58,6 +58,17 @@ export interface TmuxResult {
 }
 
 /**
+ * Default per-invocation timeout. tmux read/control ops (capture-pane,
+ * has-session, new-session, …) return in milliseconds against a healthy
+ * server; 10s is generous headroom. The long-lived "wait for the agent"
+ * budget belongs to `io/wait.ts`'s loop, NOT to a single subprocess — so
+ * a wedged tmux (process alive but unresponsive: NFS stall, server bug,
+ * modal pane) surfaces as a typed `BackendUnreachable[timeout]` inside
+ * `wait()`'s budget rather than hanging the consumer's `await` forever.
+ */
+const DEFAULT_EXEC_TIMEOUT_MS = 10_000;
+
+/**
  * One executor instance per backend. Holds the private socket name and the
  * observability emitter. Every tmux invocation goes through {@link run}; that
  * is what enforces the `-f /dev/null` + `-L <socket>` discipline tree-wide.
@@ -86,16 +97,19 @@ export class TmuxExec {
    * A wrapper that reads only one stream misses one case (see
    * `engineer/wiki/tmux-pane-death-detection`).
    *
-   * @throws `BackendUnreachable` on spawn failure (ENOENT, EPIPE, "no server
-   *   running" on a connect-only operation, etc.). The session-name field
-   *   on the typed error is the *requested* session (passed by the caller).
+   * @throws `BackendUnreachable` — `spawn-failed` on spawn error (ENOENT,
+   *   EPIPE), `no-server` when the server isn't running on a connect-only
+   *   operation, `timeout` when the invocation doesn't return within
+   *   `opts.timeoutMs` (default {@link DEFAULT_EXEC_TIMEOUT_MS}). The
+   *   session-name field on the typed error is the *requested* session.
    */
   async run(
     args: string[],
-    opts: { sessionName?: string; input?: string } = {},
+    opts: { sessionName?: string; input?: string; timeoutMs?: number } = {},
   ): Promise<TmuxResult> {
     const fullArgs = ["-L", this.socket, "-f", "/dev/null", ...args];
     const sessionName = opts.sessionName ?? "<unknown>";
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
     const startedAt = Date.now();
     return new Promise<TmuxResult>((resolve, reject) => {
       const child = spawn("tmux", fullArgs, {
@@ -109,6 +123,25 @@ export class TmuxExec {
       let stdout = "";
       let stderr = "";
       let spawnErr: Error | null = null;
+      let settled = false;
+
+      // Per-invocation timeout: SIGKILL the child WE spawned (peer-process-safe
+      // by construction — exact PID, ADR 0004) and reject. The `close` handler
+      // still fires after the kill, but `settled` guards against double-settle.
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill("SIGKILL");
+        reject(
+          new BackendUnreachable(
+            sessionName,
+            "timeout",
+            new Error(`backend command did not return within ${timeoutMs}ms`),
+          ),
+        );
+      }, timeoutMs);
+      timer.unref?.();
+
       child.stdout?.on("data", (b) => {
         stdout += b.toString("utf8");
       });
@@ -119,6 +152,9 @@ export class TmuxExec {
         spawnErr = err;
       });
       child.on("close", (code) => {
+        if (settled) return; // already rejected via timeout
+        settled = true;
+        clearTimeout(timer);
         const durationMs = Date.now() - startedAt;
         const exit = code ?? -1;
         this.#events.emit({
@@ -130,7 +166,7 @@ export class TmuxExec {
           stderr,
         });
         if (spawnErr) {
-          reject(new BackendUnreachable(sessionName, spawnErr));
+          reject(new BackendUnreachable(sessionName, "spawn-failed", spawnErr));
           return;
         }
         // tmux is on PATH but its server is down on a connect-only
@@ -141,6 +177,7 @@ export class TmuxExec {
           reject(
             new BackendUnreachable(
               sessionName,
+              "no-server",
               new Error("no server running on the configured socket"),
             ),
           );
@@ -184,6 +221,7 @@ export function classifyTmuxFailure(
     // stderr is still available via observability (`onBackendCommand`).
     return new BackendUnreachable(
       sessionName,
+      "no-server",
       new Error("no server running on the configured socket"),
     );
   }
