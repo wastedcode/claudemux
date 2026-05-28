@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// claudemux CLI entry — the full commander wiring lands in T11.
-import process from "node:process";
+import { runCli } from "../dist/cli/main.js";
 
-process.stderr.write("claudemux: CLI not yet wired (T11 pending)\n");
-process.exit(1);
+runCli(process.argv).then((code) => {
+  process.exit(code);
+});

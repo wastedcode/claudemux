@@ -42,3 +42,16 @@ async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Pr
   const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
   return classify(text, agent.rules);
 }
+
+/**
+ * Build a {@link SessionHandle} that points at an existing session, without
+ * going through `create()`. Internal — used by the stateless CLI to
+ * "reattach" between invocations.
+ *
+ * NOT exported from `src/index.ts`. Public consumers always go through
+ * `create()` to guarantee the session was booted by the substrate (and so
+ * SessionExists fires on collision rather than silent adoption).
+ */
+export function attachHandle(deps: HandleDeps): SessionHandle {
+  return makeHandle(deps);
+}
