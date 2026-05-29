@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDef, BootDialog } from "../agents/types.js";
 import type { Backend, BackendEvent, SendPayload, SessionRef } from "../backends/types.js";
-import { DialogStuck, LoginRequired, ReplTimeout, WorkspaceUntrusted } from "../errors.js";
+import {
+  AgentExitedDuringBoot,
+  BackendUnreachable,
+  DialogStuck,
+  LoginRequired,
+  ReplTimeout,
+  SessionGone,
+  WorkspaceUntrusted,
+} from "../errors.js";
 import { bootSession } from "./boot.js";
 
 /**
@@ -225,6 +233,67 @@ describe("bootSession — premature-ready guard (stabilize gate)", () => {
     await bootSession(flapThenSettle, agent, { namespace: "ns", name: "x" }, { timeoutMs: 10_000 });
     // It must have polled past the flapping frames before declaring ready.
     expect(calls).toBeGreaterThan(4);
+  });
+});
+
+describe("bootSession — agent exits before ready (the collision shape)", () => {
+  const agent = stubAgent([]);
+  const ref = { namespace: "ns", name: "collide" };
+
+  /**
+   * A backend whose capture fails (the spawned pane was reaped), with a
+   * configurable cause and liveness — the exact shape a `--session-id`
+   * collision produces under `remain-on-exit off`.
+   */
+  function dyingBackend(captureError: Error, alive: boolean): Backend {
+    return {
+      id: "dying",
+      spawn: () => Promise.resolve(),
+      kill: () => Promise.resolve(),
+      exists: () => Promise.resolve(alive),
+      list: () => Promise.resolve([]),
+      send: () => Promise.resolve(),
+      capture: () => Promise.reject(captureError),
+      setSessionMeta: () => Promise.resolve(),
+      getSessionMeta: () => Promise.resolve(undefined),
+      onCommand: () => () => undefined,
+    };
+  }
+
+  it("maps a reaped session (capture fails + not alive) to AgentExitedDuringBoot, fast", async () => {
+    const backend = dyingBackend(new SessionGone("ns/collide"), false);
+    const t0 = Date.now();
+    const err = await bootSession(backend, agent, ref, { timeoutMs: 60_000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(AgentExitedDuringBoot);
+    // Fast — it must NOT wait out the 60s ReplTimeout budget.
+    expect(Date.now() - t0).toBeLessThan(5_000);
+  });
+
+  it("carries the caller-chosen agentSessionId on the error (collision stays actionable)", async () => {
+    const ID = "abcdef01-2345-4678-9abc-def012345678";
+    const backend = dyingBackend(new SessionGone("ns/collide"), false);
+    const err = await bootSession(backend, agent, ref, {
+      timeoutMs: 60_000,
+      agentSessionId: ID,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(AgentExitedDuringBoot);
+    expect((err as AgentExitedDuringBoot).agentSessionId).toBe(ID);
+  });
+
+  it("does NOT collapse a backend-level fault into AgentExitedDuringBoot", async () => {
+    // A genuinely-unreachable backend is a different failure — keep it distinct.
+    const backend = dyingBackend(new BackendUnreachable("ns/collide", "timeout"), false);
+    const err = await bootSession(backend, agent, ref, { timeoutMs: 60_000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(BackendUnreachable);
+    expect(err).not.toBeInstanceOf(AgentExitedDuringBoot);
+  });
+
+  it("re-surfaces the original error when the pane is still alive (transient capture hiccup)", async () => {
+    // Capture failed but the session is alive → not a boot-death; stay honest.
+    const backend = dyingBackend(new SessionGone("ns/collide"), true);
+    const err = await bootSession(backend, agent, ref, { timeoutMs: 60_000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(SessionGone);
+    expect(err).not.toBeInstanceOf(AgentExitedDuringBoot);
   });
 });
 

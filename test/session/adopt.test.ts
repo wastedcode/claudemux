@@ -196,6 +196,32 @@ describe("adopt() — #5 idempotent + input guard", () => {
   });
 });
 
+describe("adopt() — #7 agentSessionId recovery from the session-meta cache", () => {
+  const ID = "abcdef01-2345-4678-9abc-def012345678";
+
+  it("recovers the id create() cached on the live session", async () => {
+    const backend = tmuxBackend({ socket: h.socket });
+    await spawnLive(backend, "recover");
+    // Simulate what create() does after spawn: cache the id under the shared key.
+    await backend.setSessionMeta({ namespace: NS, name: "recover" }, "agent-session-id", ID);
+
+    const session = await adopt({ name: "recover", backend });
+    expect(session.agentSessionId).toBe(ID);
+
+    await backend.kill({ namespace: NS, name: "recover" });
+  });
+
+  it("reports undefined on a cache miss — never fabricates an id", async () => {
+    const backend = tmuxBackend({ socket: h.socket });
+    await spawnLive(backend, "nocache"); // no meta written
+
+    const session = await adopt({ name: "nocache", backend });
+    expect(session.agentSessionId).toBeUndefined();
+
+    await backend.kill({ namespace: NS, name: "nocache" });
+  });
+});
+
 describe("adopt() — #6 agent-def fidelity", () => {
   it("classifies via the PASSED agent's rules, not the session or claude", async () => {
     const backend = tmuxBackend({ socket: h.socket });

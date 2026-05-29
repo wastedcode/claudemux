@@ -14,6 +14,13 @@ interface HandleDeps {
   agent: AgentDef;
   namespace: string;
   name: string;
+  /**
+   * The agent's conversation id, when known — surfaced as
+   * {@link SessionHandle.agentSessionId}. `undefined` for sessions with no
+   * recoverable id (older/non-claudemux, a cache-miss at adopt, or a bare
+   * `--resume`); never fabricated.
+   */
+  agentSessionId?: string;
 }
 
 /**
@@ -28,6 +35,7 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
   return {
     name: deps.name,
     namespace: deps.namespace,
+    ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
     send: (text) => mutex.run(() => sendOnce(deps.backend, deps.agent, ref, text)),
     interrupt: () => mutex.run(() => interruptOnce(deps.backend, ref)),
     wait: (opts?: ReadyOpts) =>

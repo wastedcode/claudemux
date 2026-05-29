@@ -18,6 +18,10 @@ export default defineConfig({
       // replay: keep live claude out of the gatekeeper path; it runs only under
       // the dedicated network-isolated live workflow.
       "test/session/interrupt.live.test.ts",
+      // agent-session-id.live.test.ts spawns a REAL authenticated claude (gated
+      // by CLAUDEMUX_LIVE_AGENT_SESSION_ID=1) to prove the id round-trip,
+      // resume-via-extraArgs, and the collision error — same isolation reason.
+      "test/session/agent-session-id.live.test.ts",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,

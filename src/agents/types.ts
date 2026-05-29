@@ -50,11 +50,38 @@ export interface AgentDef {
   /** Stable identifier (e.g. `"claude"`). */
   readonly name: string;
 
-  /** Resolve the spawn argv for this agent given a cwd. */
-  buildArgv(o: { cwd: string; extraArgs?: string[] }): {
+  /**
+   * Resolve the spawn argv for this agent.
+   *
+   * @param o.cwd — the working directory (plumbed by the session/backend layer).
+   * @param o.extraArgs — caller-supplied flags, passed through verbatim.
+   * @param o.sessionId — the substrate-minted (or caller-supplied) conversation
+   *   id the agent should run under. The agent decides whether and how to inject
+   *   it (claude maps it to `--session-id`); a caller's own identity flag in
+   *   `extraArgs` wins over it. Neutral here — the flag *string* is the agent's.
+   * @param o.sessionIdExplicit — `true` only when the consumer explicitly chose
+   *   the id (`create({ agentSessionId })`), `false`/absent when it was minted.
+   *   An explicit id that conflicts with an `extraArgs` identity flag is a
+   *   caller error → the agent throws a typed `ClaudemuxError`; a minted id is
+   *   silently suppressed by such a flag instead.
+   * @param o.sessionName — the session's human label, for typed-error context
+   *   on the conflict path (the session has not been spawned yet).
+   * @returns `agentSessionId` — the id the argv will **actually** run under (the
+   *   injected id, a caller's `extraArgs` id, or `undefined` when the agent
+   *   cannot know it, e.g. a bare `--resume`). `create()` surfaces *this* value,
+   *   never the mint variable — single source of truth.
+   */
+  buildArgv(o: {
+    cwd: string;
+    extraArgs?: string[];
+    sessionId?: string;
+    sessionIdExplicit?: boolean;
+    sessionName?: string;
+  }): {
     cmd: string;
     argv: string[];
     env?: Record<string, string>;
+    agentSessionId?: string;
   };
 
   /** Boot orchestration knobs. */

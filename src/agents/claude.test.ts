@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentSessionIdConflict } from "../errors.js";
 import { claude } from "./claude.js";
 
 /**
@@ -64,6 +65,151 @@ describe("claude AgentDef", () => {
     expect(r.argv).toEqual(["--print", "hello"]);
     expect(r.argv).not.toContain("--permission-mode");
     expect(r.argv).not.toContain("--allowedTools");
+  });
+});
+
+const UUID = "11111111-2222-4333-8444-555555555555";
+const UUID2 = "99999999-8888-4777-9666-555555555555";
+
+describe("claude.buildArgv — session-id injection (the always-mint happy path)", () => {
+  it("injects --session-id <id> as TWO adjacent argv elements and surfaces it", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID });
+    expect(r.argv).toEqual(["--session-id", UUID]);
+    expect(r.agentSessionId).toBe(UUID);
+    // The flag and its value are at adjacent indices.
+    const i = r.argv.indexOf("--session-id");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(r.argv[i + 1]).toBe(UUID);
+  });
+
+  it("the value is NEVER string-joined onto the flag (--session-id=<id>) — argv-injection invariant", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, extraArgs: ["--print"] });
+    // No element fuses the flag and its value; the id is its own element.
+    expect(r.argv.some((a) => a.startsWith("--session-id="))).toBe(false);
+    expect(r.argv).toContain(UUID);
+    // Exactly one --session-id flag, ever.
+    expect(r.argv.filter((a) => a === "--session-id")).toHaveLength(1);
+    // extraArgs still ride alongside the injected pair.
+    expect(r.argv).toContain("--print");
+  });
+
+  it("no sessionId and no identity flag → passthrough, agentSessionId undefined (back-compat)", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", extraArgs: ["--print", "hello"] });
+    expect(r.argv).toEqual(["--print", "hello"]);
+    expect(r.agentSessionId).toBeUndefined();
+  });
+});
+
+describe("claude.buildArgv — caller-wins precedence (a caller identity flag always wins; never two --session-id)", () => {
+  it("extraArgs --session-id <x> (minted) → passes x through, suppresses the mint, surfaces x", () => {
+    const r = claude.buildArgv({
+      cwd: "/tmp",
+      sessionId: UUID, // the mint
+      extraArgs: ["--session-id", UUID2],
+    });
+    expect(r.argv).toEqual(["--session-id", UUID2]); // mint suppressed, no duplicate
+    expect(r.argv.filter((a) => a === "--session-id")).toHaveLength(1);
+    expect(r.agentSessionId).toBe(UUID2);
+  });
+
+  it("extraArgs --session-id=<x> joined form is recognized and suppresses the mint", () => {
+    const r = claude.buildArgv({
+      cwd: "/tmp",
+      sessionId: UUID,
+      extraArgs: [`--session-id=${UUID2}`],
+    });
+    expect(r.argv).toEqual([`--session-id=${UUID2}`]);
+    expect(r.argv).not.toContain(UUID); // mint never emitted
+    expect(r.agentSessionId).toBe(UUID2);
+  });
+
+  it("extraArgs --resume <id> (minted) → passthrough, suppresses mint, surfaces id", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, extraArgs: ["--resume", UUID2] });
+    expect(r.argv).toEqual(["--resume", UUID2]);
+    expect(r.argv).not.toContain("--session-id");
+    expect(r.agentSessionId).toBe(UUID2);
+  });
+
+  it("extraArgs -r <id> shorthand → surfaces id", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, extraArgs: ["-r", UUID2] });
+    expect(r.agentSessionId).toBe(UUID2);
+    expect(r.argv).not.toContain("--session-id");
+  });
+
+  it("extraArgs bare --resume (no value) → passthrough, suppresses mint, surfaces undefined", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, extraArgs: ["--resume"] });
+    expect(r.argv).toEqual(["--resume"]);
+    expect(r.argv).not.toContain("--session-id");
+    expect(r.agentSessionId).toBeUndefined();
+  });
+
+  it("extraArgs --resume followed by another flag → treated as bare, surfaces undefined", () => {
+    const r = claude.buildArgv({
+      cwd: "/tmp",
+      sessionId: UUID,
+      extraArgs: ["--resume", "--verbose"],
+    });
+    expect(r.agentSessionId).toBeUndefined();
+    expect(r.argv).not.toContain("--session-id");
+  });
+
+  it("extraArgs --fork-session → suppresses mint, surfaces undefined (new id, unknowable)", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, extraArgs: ["--fork-session"] });
+    expect(r.argv).toEqual(["--fork-session"]);
+    expect(r.argv).not.toContain("--session-id");
+    expect(r.agentSessionId).toBeUndefined();
+  });
+
+  it("--fork-session dominates a co-present --resume <id> (resumes into a new, unknowable id)", () => {
+    const r = claude.buildArgv({
+      cwd: "/tmp",
+      sessionId: UUID,
+      extraArgs: ["--resume", UUID2, "--fork-session"],
+    });
+    expect(r.agentSessionId).toBeUndefined();
+    expect(r.argv).not.toContain("--session-id");
+  });
+});
+
+describe("claude.buildArgv — explicit id conflicting with an extraArgs identity flag fails fast", () => {
+  it("explicit agentSessionId + extraArgs --session-id → AgentSessionIdConflict", () => {
+    expect(() =>
+      claude.buildArgv({
+        cwd: "/tmp",
+        sessionId: UUID,
+        sessionIdExplicit: true,
+        sessionName: "claudemux/job",
+        extraArgs: ["--session-id", UUID2],
+      }),
+    ).toThrow(AgentSessionIdConflict);
+  });
+
+  it("explicit agentSessionId + extraArgs --resume → AgentSessionIdConflict", () => {
+    expect(() =>
+      claude.buildArgv({
+        cwd: "/tmp",
+        sessionId: UUID,
+        sessionIdExplicit: true,
+        extraArgs: ["--resume", UUID2],
+      }),
+    ).toThrow(AgentSessionIdConflict);
+  });
+
+  it("explicit agentSessionId + bare --fork-session → AgentSessionIdConflict", () => {
+    expect(() =>
+      claude.buildArgv({
+        cwd: "/tmp",
+        sessionId: UUID,
+        sessionIdExplicit: true,
+        extraArgs: ["--fork-session"],
+      }),
+    ).toThrow(AgentSessionIdConflict);
+  });
+
+  it("explicit agentSessionId with NO conflicting flag injects normally", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: UUID, sessionIdExplicit: true });
+    expect(r.argv).toEqual(["--session-id", UUID]);
+    expect(r.agentSessionId).toBe(UUID);
   });
 });
 

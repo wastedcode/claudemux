@@ -62,6 +62,30 @@ export interface SessionHandle {
   readonly namespace: string;
 
   /**
+   * The agent's own conversation id — opaque and **backend-neutral** (today
+   * claudemux assigns it as claude's `--session-id`; the field name keeps the
+   * API alive across a backend swap). The consumer uses it to resume the exact
+   * conversation (`create({ extraArgs: ["--resume", id] })`) and to locate the
+   * agent's transcript, without scraping for it.
+   *
+   * **Optional by truth, never fabricated.** claudemux now *always* mints and
+   * injects this id at {@link create} (a deliberate, stable surface — consumers
+   * may depend on its presence). But a session created by an older claudemux, a
+   * non-claudemux session, an {@link adopt} whose recovery cache missed, or a
+   * spawn that rode a bare `--resume`/`--fork-session` in `extraArgs` (where the
+   * id is claude's to pick and we cannot know it) reports `undefined` — the
+   * honest answer, not a guess. `undefined → string` later stays non-breaking;
+   * the reverse would not, which is why it is optional now.
+   *
+   * @remarks
+   * Persist `{ name, agentSessionId }` *together* in your own store for restart
+   * recovery: the session-option cache that backs {@link adopt}'s recovery only
+   * survives while the backend session is alive; recreating after a crash needs
+   * your stored id.
+   */
+  readonly agentSessionId?: string;
+
+  /**
    * Deliver `text` as one logical user turn. Multi-line input is paste-safe
    * by construction (the substrate has no `sendRawText` primitive).
    *

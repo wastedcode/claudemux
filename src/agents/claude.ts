@@ -1,3 +1,4 @@
+import { AgentSessionIdConflict } from "../errors.js";
 import type { ClassifierRules } from "../state/types.js";
 import type { AgentDef, BootDialog } from "./types.js";
 
@@ -104,22 +105,134 @@ const rules: ClassifierRules = {
 };
 
 /**
- * Build the spawn argv for `claude`. The substrate adds no flags beyond what
- * the caller passes via `extraArgs` — never injects `--permission-mode` or
- * `--allowedTools` unless the consumer explicitly opted in (acceptance
- * criterion: "Never injects --permission-mode or --allowed-tools").
+ * claude's conversation-identity flags. **The only place that knows these
+ * strings** (layering-grep T12 keeps the `--session-id` vocabulary out of the
+ * session layer). `create()` mints a neutral `sessionId`; *this* file decides
+ * it becomes `--session-id`, and recognizes a caller's own identity flag in
+ * `extraArgs` so the substrate never emits two.
  */
-function buildArgv(o: { cwd: string; extraArgs?: string[] }): {
+const SESSION_ID_FLAG = "--session-id";
+const RESUME_FLAGS = ["--resume", "-r"];
+const FORK_FLAG = "--fork-session";
+
+/**
+ * What identity flag (if any) the caller already put in `extraArgs`, and the
+ * id it selects. For `session-id`/`resume`, `value === undefined` means "an id
+ * we cannot know up front" (a bare `--resume`). `fork` carries no value at all
+ * — a `--fork-session` resumes into a fresh id we can never know. Both cases
+ * surface `agentSessionId` as `undefined` — the only paths where it is honestly
+ * unknowable.
+ */
+type CallerIdentity =
+  | { kind: "session-id"; value: string | undefined }
+  | { kind: "resume"; value: string | undefined }
+  | { kind: "fork" };
+
+function findCallerIdentity(extraArgs: readonly string[]): CallerIdentity | undefined {
+  // A `--fork-session` anywhere means claude resumes into a NEW id we can't
+  // know — it dominates a co-present --resume/--session-id for the surfaced id.
+  if (extraArgs.includes(FORK_FLAG)) return { kind: "fork" };
+
+  for (let i = 0; i < extraArgs.length; i++) {
+    const arg = extraArgs[i];
+    if (arg === undefined) continue;
+    // `--session-id <x>` or `--session-id=<x>`.
+    if (arg === SESSION_ID_FLAG) return { kind: "session-id", value: extraArgs[i + 1] };
+    if (arg.startsWith(`${SESSION_ID_FLAG}=`)) {
+      return { kind: "session-id", value: arg.slice(SESSION_ID_FLAG.length + 1) };
+    }
+    // `-r`/`--resume [value]` (optional value) or `--resume=<id>`.
+    if (RESUME_FLAGS.includes(arg)) {
+      const next = extraArgs[i + 1];
+      // Bare resume: nothing follows, or the next token is itself a flag.
+      const value = next !== undefined && !next.startsWith("-") ? next : undefined;
+      return { kind: "resume", value };
+    }
+    const resumeEq = RESUME_FLAGS.map((f) => `${f}=`).find((p) => arg.startsWith(p));
+    if (resumeEq) return { kind: "resume", value: arg.slice(resumeEq.length) };
+  }
+  return undefined;
+}
+
+/**
+ * Build the spawn argv for `claude`.
+ *
+ * **Identity:** the substrate always knows the conversation id up front — see
+ * `create()`'s mint. This builder maps the neutral `sessionId` to claude's
+ * `--session-id <id>`, emitted as **two adjacent argv elements** (never
+ * `--session-id=<id>`, never string-joined, never via `send-keys`). That
+ * single-argv-element shape is a *security invariant*, not just a style: every
+ * element is passed to the backend verbatim with no shell, so a value can never
+ * be re-parsed as a flag or (in tmux's argv grammar, where a bare `;` is a
+ * command separator) a second command. `create()` validates the id is a v4
+ * UUID before we ever get here, so the value cannot be `;`, a path, or any
+ * meaningful token — but the two-element shape is what makes that validation
+ * sufficient.
+ *
+ * **Caller-wins precedence** (a caller's own identity flag in `extraArgs`
+ * always wins; we never emit two `--session-id`):
+ *   - no identity flag → inject `--session-id <sessionId>`, return `sessionId`.
+ *   - `--session-id <x>` → pass through, suppress mint, return `x`.
+ *   - `--resume <id>` → pass through, suppress mint, return `id`.
+ *   - bare `--resume` / `--fork-session` → pass through, suppress mint, return
+ *     `undefined` (claude picks the id; the one path we can't know it).
+ *   - any of the above **and** `sessionIdExplicit` → fail fast with
+ *     `AgentSessionIdConflict` (the caller insisted on an id two ways).
+ *
+ * Beyond identity the substrate adds no flags — never injects
+ * `--permission-mode` or `--allowedTools` unless the consumer opted in via
+ * `extraArgs` (acceptance criterion: "Never injects --permission-mode or
+ * --allowed-tools"). `--session-id` grants no authority — it only names the
+ * conversation — so always-minting it does not breach that criterion.
+ */
+function buildArgv(o: {
+  cwd: string;
+  extraArgs?: string[];
+  sessionId?: string;
+  sessionIdExplicit?: boolean;
+  sessionName?: string;
+}): {
   cmd: string;
   argv: string[];
   env: Record<string, string>;
+  agentSessionId?: string;
 } {
   void o.cwd; // cwd is plumbed by the session/backend layer at spawn time
-  return {
-    cmd: "claude",
-    argv: o.extraArgs ?? [],
-    env: { LC_ALL: "C.UTF-8" },
-  };
+  const extraArgs = o.extraArgs ?? [];
+  const env = { LC_ALL: "C.UTF-8" };
+
+  const caller = findCallerIdentity(extraArgs);
+  if (caller) {
+    // A caller-chosen identity flag conflicts with an explicit agentSessionId:
+    // the caller asked for an id two different ways. Fail fast before spawn.
+    if (o.sessionIdExplicit) {
+      throw new AgentSessionIdConflict(o.sessionName ?? "");
+    }
+    // Otherwise the caller's flag wins and the mint is suppressed. Pass
+    // extraArgs through verbatim; surface the id the flag selects (or undefined
+    // for a bare resume / fork, which we genuinely cannot know up front).
+    const surfaced = caller.kind === "fork" ? undefined : caller.value;
+    return {
+      cmd: "claude",
+      argv: extraArgs,
+      env,
+      ...(surfaced === undefined ? {} : { agentSessionId: surfaced }),
+    };
+  }
+
+  // No caller identity flag. Inject the substrate's id if we have one. The flag
+  // and its value are TWO adjacent argv elements — never joined (the invariant).
+  if (o.sessionId !== undefined) {
+    return {
+      cmd: "claude",
+      argv: [SESSION_ID_FLAG, o.sessionId, ...extraArgs],
+      env,
+      agentSessionId: o.sessionId,
+    };
+  }
+
+  // No id at all (e.g. an internal caller that didn't mint one) — pass through.
+  return { cmd: "claude", argv: extraArgs, env };
 }
 
 /** The `claude` agent definition. */

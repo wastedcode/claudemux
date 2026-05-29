@@ -34,6 +34,56 @@ export class SessionExists extends ClaudemuxError {
 }
 
 /**
+ * Thrown by {@link create} when a caller-supplied `agentSessionId` is not a
+ * well-formed v4 UUID. Thrown *before spawn*, at the substrate boundary.
+ *
+ * @remarks
+ * This is a **security boundary**, not just input hygiene. The id flows into
+ * the agent's argv next to its identity flag, and into the backend's per-session
+ * store and command grammar — where, in some backends, a bare `;` element can be
+ * a command separator. A v4 UUID is hex + hyphens only, so it can never be `;`,
+ * a path, or any token a backend would re-interpret; rejecting non-UUIDs here is
+ * what keeps the always-two-argv-elements injection safe. Do not "simplify" this
+ * to a loose check.
+ */
+export class InvalidAgentSessionId extends ClaudemuxError {
+  /** The malformed value the caller passed. */
+  readonly value: string;
+
+  constructor(value: string) {
+    super(
+      `invalid agentSessionId ${JSON.stringify(value)}: must be a v4 UUID (e.g. the value crypto.randomUUID() produces)`,
+      // No session was created — mirror InvalidSessionName's placeholder.
+      "<invalid-agentSessionId>",
+    );
+    this.value = value;
+  }
+}
+
+/**
+ * Thrown by {@link create} when the caller passes an explicit
+ * `agentSessionId` **and** an identity flag in `extraArgs` that also selects a
+ * conversation id (claude: `--session-id`, `-r`/`--resume`, `--fork-session`).
+ * The two would fight over which id the agent runs under, so the substrate
+ * fails fast *before spawn* rather than silently dropping one. Pass the id one
+ * way or the other, not both.
+ *
+ * @remarks
+ * Which `extraArgs` flags count as identity flags is agent-specific knowledge,
+ * so the conflict is detected inside the agent's `buildArgv` (claude owns the
+ * flag vocabulary per the layering grep) and surfaced as this neutral error.
+ */
+export class AgentSessionIdConflict extends ClaudemuxError {
+  constructor(sessionName: string) {
+    super(
+      "explicit agentSessionId conflicts with an identity flag in extraArgs " +
+        "(e.g. --session-id / --resume / --fork-session); pass the conversation id one way, not both",
+      sessionName,
+    );
+  }
+}
+
+/**
  * Thrown by the boot orchestrator when a recognized dialog matches but its
  * response did not advance the pane within the dialog timeout.
  */
@@ -131,6 +181,55 @@ export class PaneDead extends ClaudemuxError {
 export class SessionGone extends ClaudemuxError {
   constructor(sessionName: string) {
     super("session is gone", sessionName);
+  }
+}
+
+/**
+ * Thrown by {@link create} when the agent process **exits before the session
+ * becomes ready** — claudemux spawned it, but it was gone (its backend session
+ * reaped) before boot could reach an interactive prompt.
+ *
+ * @remarks
+ * **The most common cause is an `agentSessionId` collision:** claude refuses to
+ * silently resume or clobber an in-use conversation id — it prints
+ * "Session ID … is already in use" and exits. But a malformed `extraArgs` flag,
+ * an auth edge, or any startup crash produce the *identical* shape, and
+ * claudemux **cannot read which** — the substrate runs panes with
+ * `remain-on-exit off`, so claude's stderr is reaped before boot can capture
+ * it. That is the same deliberate property that lets {@link adopt} hand back a
+ * clean {@link SessionGone} for a crashed agent instead of a corpse handle, so
+ * we do not flip it to recover a diagnostic string.
+ *
+ * This is a distinct class on purpose (errors.ts reuses before adding):
+ * {@link PaneDead} is a dead process whose pane is still *present* (only under
+ * `remain-on-exit on`); {@link SessionGone} reads as *external* reaping of a
+ * session that should exist. Neither carries the meaning the create path needs
+ * — *"the agent I just spawned rejected its own launch"* (self-inflicted exit
+ * vs external interference) — which is exactly what the consumer must act on.
+ *
+ * When the spawn used a caller-chosen id, it is carried on
+ * {@link agentSessionId} so the collision case stays actionable as structured
+ * data (pick another id, or resume that conversation) without scraping text.
+ *
+ * **Deferred precision:** once a `transcriptPath` helper lands (owning claude's
+ * cwd-slug rule in `claude.ts` per the layering grep), a pre-spawn transcript
+ * probe can upgrade the collision case to a precise `AgentSessionInUse` and
+ * fall back to this error for the other death causes — a non-breaking addition.
+ */
+export class AgentExitedDuringBoot extends ClaudemuxError {
+  /** The caller-chosen id the spawn used, if any — the likely collision culprit. */
+  readonly agentSessionId?: string;
+
+  constructor(sessionName: string, agentSessionId?: string) {
+    const withId =
+      agentSessionId !== undefined
+        ? ` (spawned with agentSessionId ${agentSessionId}, which is most likely already in use)`
+        : "";
+    super(
+      `the agent exited before the session became ready${withId}; the most common cause is an agentSessionId collision (the agent refuses to resume silently and exits)`,
+      sessionName,
+    );
+    if (agentSessionId !== undefined) this.agentSessionId = agentSessionId;
   }
 }
 

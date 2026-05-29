@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentExitedDuringBoot,
+  AgentSessionIdConflict,
   BackendError,
   BackendUnreachable,
   ClaudemuxError,
   DialogStuck,
+  InvalidAgentSessionId,
   LoginRequired,
   PaneDead,
   ReplTimeout,
@@ -25,6 +28,12 @@ describe("typed errors", () => {
         err: new BackendError("e", ["tmux", "has-session"], 1, "can't find session: e"),
         name: "e",
       },
+      { err: new AgentSessionIdConflict("f"), name: "f" },
+      { err: new AgentExitedDuringBoot("g"), name: "g" },
+      { err: new AgentExitedDuringBoot("h", "abcdef01-2345-4678-9abc-def012345678"), name: "h" },
+      // InvalidAgentSessionId has no real session (thrown before spawn) — it
+      // uses a placeholder name, mirroring InvalidSessionName.
+      { err: new InvalidAgentSessionId("nope"), name: "<invalid-agentSessionId>" },
     ];
     for (const { err, name } of cases) {
       expect(err.message).toContain(`[claudemux:${name}]`);
@@ -81,8 +90,34 @@ describe("typed errors", () => {
     expect(e.argv).toContain("tmux");
   });
 
+  it("InvalidAgentSessionId carries the offending value and names the UUID requirement", () => {
+    const e = new InvalidAgentSessionId("not-a-uuid");
+    expect(e.value).toBe("not-a-uuid");
+    expect(e.message).toContain("v4 UUID");
+    // The offending value is JSON-encoded (so control chars can't break the line).
+    expect(e.message).toContain(JSON.stringify("not-a-uuid"));
+  });
+
+  it("AgentExitedDuringBoot is optional-id and carries the chosen id when present", () => {
+    const without = new AgentExitedDuringBoot("s");
+    expect(without.agentSessionId).toBeUndefined();
+    expect(without.message).toContain("exited before the session became ready");
+
+    const id = "abcdef01-2345-4678-9abc-def012345678";
+    const withId = new AgentExitedDuringBoot("s", id);
+    expect(withId.agentSessionId).toBe(id);
+    expect(withId.message).toContain(id);
+    // Classify-don't-echo: the message is bounded prose — no raw pane / stderr /
+    // ANSI is ever blasted through (there is nothing raw to echo by design).
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting NO control chars leak
+    expect(withId.message).not.toMatch(/[\x00-\x08\x1b]/);
+  });
+
   it("error class .name property is the class name (for instanceof-shape logging)", () => {
     expect(new SessionExists("s").name).toBe("SessionExists");
     expect(new LoginRequired("s").name).toBe("LoginRequired");
+    expect(new AgentExitedDuringBoot("s").name).toBe("AgentExitedDuringBoot");
+    expect(new AgentSessionIdConflict("s").name).toBe("AgentSessionIdConflict");
+    expect(new InvalidAgentSessionId("x").name).toBe("InvalidAgentSessionId");
   });
 });

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`agentSessionId`** — every session now has a stable, opaque, backend-neutral
+  conversation id, surfaced as `readonly agentSessionId?: string` on the handle
+  (returned by `create()` and `adopt()`). `create()` mints a v4 UUID and assigns
+  it to the agent at spawn (claude's `--session-id`), so you know the id **before
+  the agent writes a byte** — no scraping, no race. Use it to **resume** a
+  conversation (rides `extraArgs`: `create({ extraArgs: ["--resume", id] })`) and
+  to **locate the transcript** (`~/.claude/projects/<cwd-slug>/<id>.jsonl`).
+  `create({ agentSessionId })` lets you choose the id for a *fresh* conversation
+  (v4-UUID-validated; caller-wins over an `extraArgs` identity flag; supplying
+  both is a fail-fast `AgentSessionIdConflict`). A chosen id that already has a
+  conversation makes the agent exit rather than silently resume → typed
+  `AgentExitedDuringBoot` (the id carried on the error), fast, never a silent
+  resume. The id is `undefined` — never fabricated — for older/non-claudemux,
+  cache-miss-on-adopt, or bare-`--resume`/`--fork-session` sessions. New typed
+  errors: `AgentExitedDuringBoot`, `InvalidAgentSessionId`, `AgentSessionIdConflict`.
+  Persist `{ name, agentSessionId }` together for restart recovery. **Additive /
+  non-breaking** — the field is optional (optional→required later stays
+  non-breaking). See README §"Session identity".
 - **`interrupt()`** — stop a working agent. Fires a single ESC (claude's own
   interrupt key) at the session through the per-handle mutex, same as
   `send`/`wait`. Mechanism, not policy: ESC is sent **regardless of state** and

@@ -27,3 +27,17 @@ export const PANE_HEIGHT = 40;
  * dialog/idle pattern is detected consistently across the boot and wait paths.
  */
 export const CLASSIFIER_BOTTOM_N = PANE_HEIGHT;
+
+/**
+ * Backend-neutral session-meta key under which {@link create} caches the
+ * agent's conversation id, and {@link adopt} reads it back. The id is a
+ * *locator* (it names a conversation and its transcript), not a secret; the
+ * real boundary is who can reach the backend's per-session store — today a
+ * per-process private tmux socket. If claudemux ever multi-tenants onto a
+ * *shared* tmux server, a co-tenant could enumerate every such key and locate
+ * others' transcripts; revisit the store's trust model then.
+ *
+ * One authoritative spelling shared by the writer and the reader so they can
+ * never drift apart.
+ */
+export const AGENT_SESSION_ID_META_KEY = "agent-session-id";

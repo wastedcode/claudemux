@@ -1,6 +1,13 @@
 import type { AgentDef, BootDialog } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { DialogStuck, LoginRequired, ReplTimeout, WorkspaceUntrusted } from "../errors.js";
+import {
+  AgentExitedDuringBoot,
+  BackendUnreachable,
+  DialogStuck,
+  LoginRequired,
+  ReplTimeout,
+  WorkspaceUntrusted,
+} from "../errors.js";
 import { stabilize } from "../io/stabilize.js";
 import { sleep } from "../util/sleep.js";
 import { CLASSIFIER_BOTTOM_N } from "./constants.js";
@@ -50,6 +57,14 @@ export interface BootOptions {
   trustWorkspace?: boolean;
   /** The cwd being booted into — carried on `WorkspaceUntrusted` for the caller. */
   cwd?: string;
+  /**
+   * The caller-chosen `agentSessionId` for this spawn, if any. Carried onto
+   * {@link AgentExitedDuringBoot} when the agent exits before ready, so the
+   * (overwhelmingly likely) collision case stays actionable. Omitted for a
+   * minted id — a v4 mint collides with ~zero probability, so attributing a
+   * minted-id boot-death to "id in use" would mislead.
+   */
+  agentSessionId?: string;
 }
 
 /**
@@ -61,6 +76,8 @@ export interface BootOptions {
  *   persistent trust flag is written.
  * @throws `LoginRequired` if the login-method dialog fires.
  * @throws `DialogStuck` if a recognized dialog persists after its response.
+ * @throws `AgentExitedDuringBoot` if the agent process exits (its session is
+ *   reaped) before becoming ready — most often an `agentSessionId` collision.
  * @throws `ReplTimeout` if the total budget elapses before a stable ready.
  */
 export async function bootSession(
@@ -78,7 +95,7 @@ export async function bootSession(
     if (Date.now() - start > timeoutMs) {
       throw new ReplTimeout(formatSessionLabel(ref), timeoutMs);
     }
-    const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+    const text = await captureDuringBoot(backend, ref, opts.agentSessionId);
 
     // Try every dialog matcher in order — the first that fires wins.
     const matched = agent.boot.dialogs.find((d) => d.matches(text));
@@ -115,6 +132,42 @@ export async function bootSession(
 
 function anyDialog(agent: AgentDef, text: string): boolean {
   return agent.boot.dialogs.some((d) => d.matches(text));
+}
+
+/**
+ * Capture the boot pane, distinguishing **the agent exiting before ready**
+ * from a **backend-level fault**. The agent runs with `remain-on-exit off`, so
+ * a fast exit (the dominant case: an `agentSessionId` collision — see
+ * {@link AgentExitedDuringBoot}) reaps the session; the next capture then fails
+ * because the session is gone, not because anything is wrong with us.
+ *
+ * On a capture failure we branch:
+ *   - {@link BackendUnreachable} → a server-level fault (no server / wedged /
+ *     spawn-failed) — surface it unchanged; it is not "the agent exited."
+ *   - otherwise, probe liveness: if the session is genuinely gone, the agent
+ *     exited before ready → {@link AgentExitedDuringBoot} (fast, no waiting out
+ *     the 60s `ReplTimeout`). If it is still alive, the capture hiccuped for
+ *     some other reason — surface the original error honestly.
+ *
+ * This must not mask the *alive-pane* boot failures (`LoginRequired`,
+ * `WorkspaceUntrusted`, `DialogStuck`, `ReplTimeout`): those fire on captured
+ * pane text or the timeout, never on a capture failure, so they are untouched.
+ */
+async function captureDuringBoot(
+  backend: Backend,
+  ref: SessionRef,
+  agentSessionId: string | undefined,
+): Promise<string> {
+  try {
+    return await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+  } catch (err) {
+    if (err instanceof BackendUnreachable) throw err;
+    const alive = await backend.exists(ref).catch(() => false);
+    if (!alive) {
+      throw new AgentExitedDuringBoot(formatSessionLabel(ref), agentSessionId);
+    }
+    throw err;
+  }
 }
 
 /**

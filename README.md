@@ -128,16 +128,19 @@ Typed errors — all extend `ClaudemuxError`:
 
 ```ts
 import {
-  SessionExists,      // create() collision; never silently adopts
-  LoginRequired,      // claude isn't authenticated; run `claude` interactively first
-  DialogStuck,        // a known dialog matched but didn't advance after the response
-  ReplTimeout,        // boot or wait budget elapsed before the state settled
-  PaneDead,           // the pane's process died (with the signal)
-  SessionGone,        // the session vanished from the backend
-  InvalidSessionName, // name was empty, too long, or had illegal characters
-  BackendUnreachable, // the backend isn't installed / not running / timed out
-  BackendError,       // the backend command failed (message scrubbed of its argv)
-  WorkspaceUntrusted, // cwd isn't trusted and trustWorkspace wasn't set (see below)
+  SessionExists,         // create() collision; never silently adopts
+  LoginRequired,         // claude isn't authenticated; run `claude` interactively first
+  DialogStuck,           // a known dialog matched but didn't advance after the response
+  ReplTimeout,           // boot or wait budget elapsed before the state settled
+  PaneDead,              // the pane's process died (with the signal)
+  SessionGone,           // the session vanished from the backend
+  AgentExitedDuringBoot, // the agent exited before ready — usually an agentSessionId collision
+  InvalidSessionName,    // name was empty, too long, or had illegal characters
+  InvalidAgentSessionId, // a supplied agentSessionId wasn't a v4 UUID
+  AgentSessionIdConflict,// agentSessionId given alongside an extraArgs identity flag
+  BackendUnreachable,    // the backend isn't installed / not running / timed out
+  BackendError,          // the backend command failed (message scrubbed of its argv)
+  WorkspaceUntrusted,    // cwd isn't trusted and trustWorkspace wasn't set (see below)
 } from "claudemux";
 ```
 
@@ -153,6 +156,74 @@ claudemux spawn job --cwd ./repo --trust-workspace          # CLI
 ```
 
 ⚠️ Opting in writes a **persistent, per-folder** trust flag to the agent's config (`~/.claude.json`) — it is *not* session-scoped and applies to every future run in that path, including your own interactive sessions. If you point a session at code you don't fully trust (a repo you just cloned to look at), use an **ephemeral unique path or an ephemeral `HOME` per run** — trust is sticky per `(HOME × path)`, so a reused path a prior run trusted is trusted silently.
+
+### Session identity (`agentSessionId`)
+
+Every session claudemux creates has a stable **conversation id**, surfaced as
+`readonly agentSessionId?: string` on the handle. claudemux mints a v4 UUID,
+assigns it to the agent at spawn, and hands it back — so you know the id
+**before the agent writes its first byte**, with no scraping and no race:
+
+```ts
+const session = await create({ name: "job", cwd });
+session.agentSessionId;   // e.g. "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+```
+
+It is **opaque and backend-neutral** (today it is claude's `--session-id`; the
+field name keeps the API alive across a backend swap). claudemux now **always**
+injects the id — a deliberate, stable surface you may depend on. Two jobs it
+does:
+
+- **Resume a crashed conversation.** Resume rides `extraArgs`, not a neutral
+  option — `--resume`/`--fork-session` are claude vocabulary, and only *identity*
+  (neutral) earns a first-class field:
+  ```ts
+  const resumed = await create({ name: "job2", cwd, extraArgs: ["--resume", id] });
+  ```
+- **Locate the transcript.** claude stores it keyed by id; derive the path from
+  `(cwd, agentSessionId)` — every `/` in the absolute cwd becomes `-`:
+  ```ts
+  // ~/.claude/projects/<cwd-with-slashes-as-dashes>/<agentSessionId>.jsonl
+  const slug = cwd.replace(/\//g, "-");
+  const transcript = `${homedir()}/.claude/projects/${slug}/${id}.jsonl`;
+  ```
+  (The slug rule is claude-storage detail; claudemux ships no `transcriptPath`
+  helper this release. claudemux does not read or parse transcripts — it returns
+  the id; reading the file is yours.)
+
+**Choosing the id for a fresh conversation.** Pass `agentSessionId` to pick it
+yourself (validated as a v4 UUID; **caller-wins** — your own `extraArgs` identity
+flag always beats the mint, and supplying both is a fail-fast `AgentSessionIdConflict`):
+
+```ts
+await create({ name: "job", cwd, agentSessionId: myUuid });   // fresh conversation under myUuid
+```
+
+If the id you choose **already has a conversation**, the agent refuses to
+silently resume or clobber it — it exits, and `create()` throws
+`AgentExitedDuringBoot` (fast, the id carried on the error), never a silent
+resume. (Most other early-exit causes surface the same way; claudemux can't read
+which, because panes run with the agent's stderr reaped on exit — the same
+property that gives `adopt()` a clean `SessionGone` for a crash.)
+
+**Optional by truth, never fabricated.** `agentSessionId` is `undefined` for a
+session created by an older/non-claudemux toolchain, an `adopt()` whose recovery
+cache missed, or a spawn that rode a **bare** `--resume`/`--fork-session` (where
+the agent picks the id and claudemux genuinely can't know it). It is never a
+guess.
+
+**Persist `{ name, agentSessionId }` together** in your own store for restart
+recovery. `adopt()` can recover the id from the live session while its backend
+session survives, but recreating after a crash (session gone) needs *your*
+stored id — see [persist *two* things per session](#persist-two-things-per-session--one-fails-loud-the-other-fails-silent).
+
+> ⚠️ **`extraArgs` flows through the backend's command parser.** A bare `;`
+> element is special to tmux (a command separator). claudemux validates that a
+> chosen `agentSessionId` is a hex-and-hyphens UUID — so it can never carry such
+> a token — and always passes `--session-id` and its value as *two separate argv
+> elements* (never `--session-id=<id>`). On a single-user box an arbitrary string
+> *you* put in `extraArgs` is a P3 footgun, not a vulnerability; it's noted here
+> because this surface is now frozen.
 
 ### Re-adopting a live session after a restart (`adopt()`)
 

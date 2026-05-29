@@ -11,10 +11,13 @@ export { claude } from "./agents/index.js";
 export type { AgentDef, BootDialog } from "./agents/types.js";
 
 export {
+  AgentExitedDuringBoot,
+  AgentSessionIdConflict,
   BackendError,
   BackendUnreachable,
   ClaudemuxError,
   DialogStuck,
+  InvalidAgentSessionId,
   InvalidSessionName,
   LoginRequired,
   PaneDead,

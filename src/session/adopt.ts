@@ -3,7 +3,7 @@ import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
 import { SessionGone } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { DEFAULT_NAMESPACE } from "./constants.js";
+import { AGENT_SESSION_ID_META_KEY, DEFAULT_NAMESPACE } from "./constants.js";
 import { sharedDefaultBackend } from "./default-backend.js";
 import { attachHandle } from "./handle.js";
 import { formatSessionLabel } from "./ref.js";
@@ -71,7 +71,20 @@ export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
     throw new SessionGone(formatSessionLabel(ref));
   }
 
+  // Best-effort: recover the agent's conversation id from the session-meta the
+  // creating process cached. `undefined` on a miss (older/non-claudemux session,
+  // a creator that never wrote it, or a store read failure) — adopt never
+  // fabricates an id, it tells the truth and lets the consumer fall back to its
+  // own store. getSessionMeta already collapses "unreadable" to `undefined`.
+  const agentSessionId = await backend.getSessionMeta(ref, AGENT_SESSION_ID_META_KEY);
+
   // Pure attach — no spawn, no boot, no dialog dismissal. The consumer MUST call
   // state() after adopt to learn where the live pane stands.
-  return attachHandle({ backend, agent, namespace, name: opts.name });
+  return attachHandle({
+    backend,
+    agent,
+    namespace,
+    name: opts.name,
+    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+  });
 }
