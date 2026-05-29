@@ -45,12 +45,13 @@ async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Pr
 
 /**
  * Build a {@link SessionHandle} that points at an existing session, without
- * going through `create()`. Internal — used by the stateless CLI to
- * "reattach" between invocations.
+ * spawning or booting — the "attach to a live session" seam.
  *
- * NOT exported from `src/index.ts`. Public consumers always go through
- * `create()` to guarantee the session was booted by the substrate (and so
- * SessionExists fires on collision rather than silent adoption).
+ * Two public consumers: the stateless CLI reattaches through this on every
+ * invocation, and the public `adopt()` primitive is built directly on it —
+ * `adopt()` asserts the session EXISTS, then calls `attachHandle` (the
+ * exists-asserting mirror of `create()`'s SessionExists guard). `create()`
+ * remains the only path that *boots*; `attachHandle` is pure attach.
  */
 export function attachHandle(deps: HandleDeps): SessionHandle {
   return makeHandle(deps);

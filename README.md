@@ -120,6 +120,46 @@ claudemux spawn job --cwd ./repo --trust-workspace          # CLI
 
 ⚠️ Opting in writes a **persistent, per-folder** trust flag to the agent's config (`~/.claude.json`) — it is *not* session-scoped and applies to every future run in that path, including your own interactive sessions. If you point a session at code you don't fully trust (a repo you just cloned to look at), use an **ephemeral unique path or an ephemeral `HOME` per run** — trust is sticky per `(HOME × path)`, so a reused path a prior run trusted is trusted silently.
 
+### Re-adopting a live session after a restart (`adopt()`)
+
+`adopt()` is the mirror of `create()`. Where `create()` boots a new session, `adopt()` re-attaches to one that is **already live** but was started by another process — the recovery path for when your daemon (or any long-lived orchestrator) restarts while its agents keep running. It's a **pure attach**: no spawn, no boot, no dialog dismissal. If the session isn't there, it throws `SessionGone`.
+
+```ts
+import { adopt, SessionGone } from "claudemux";
+
+const session = await adopt({ name: "job" });   // throws SessionGone if it's not there
+const where = await session.state();             // ← ALWAYS do this before you drive the pane
+```
+
+**Always call `state()` immediately after a successful `adopt()`, before you `send()` anything.** `adopt()` hands you the pane *as-is* — it may be idle, mid-dialog, wedged, or a dead husk. `state()` is how you learn which, and it's the only thing standing between you and driving a pane that isn't ready. Three things can be wrong with a "live" session you just adopted:
+
+| Symptom after `adopt()` | State | What happened | Recovery |
+|---|---|---|---|
+| `adopt()` throws `SessionGone` | **A** | the process exited — a crashed `claude` tears down the whole session, so absence is clean | re-`create()` with `--resume <agentSessionId>` |
+| handle returned, but `state()`/`wait()` never settles | **B** | the pane is attached but **wedged** | `kill()` **then** re-`create()` with `--resume` |
+| handle returned, but `capture()`/`state()` throws `PaneDead` | **C** | the pane container survives but its **process is dead** | `kill()` + re-`create()` with `--resume` |
+
+The full recovery loop — adopt, then fall back to re-create with `--resume` for each of A/B/C — is in [`examples/adopt-after-restart.ts`](./examples/adopt-after-restart.ts). `adopt()` re-establishes and re-verifies **nothing**: it inherits whatever authority context the original `create()` set up (trusted folders, permission mode, MCP) — it does not re-grant or re-check any of it.
+
+#### Persist *two* things per session — one fails loud, the other fails silent
+
+To recover a session you must persist **both** the `agentSessionId` (for `--resume`) **and** which agent def it was created with — and their failure modes are opposite:
+
+- **Forget the `agentSessionId` → you find out at once.** Re-`create()` without `--resume` starts a fresh conversation (or errors). Loud.
+- **Forget or mismatch the agent def → it lies silently.** `state()`/`wait()` classify the live pane against **the agent you pass to `adopt()`**, not the one the session was created with. Pass the wrong agent and the classifier reports the wrong state with no error. This is a *dormant-then-armed* footgun: harmless while `claude` is the only agent you ship, armed the day you ship a custom one.
+
+#### Single-writer is *your* job — claudemux holds no lock
+
+Exactly one writer per pane at any instant. claudemux serializes calls **within a single handle** (a per-handle mutex), but **not across handles or processes, and it does not detect a violation**. Two handles writing the same pane interleave keystrokes and tear a turn — **silent corruption, not a thrown error**. The only thing between two writers is socket file permissions: tmux sockets are per-UID (`/tmp/tmux-$UID/…`, mode `0700`), so a second writer is necessarily a *same-UID* process — multi-attach is an integrity risk among co-equal writers, never a privilege-crossing one. Keeping it to one writer is your architecture's responsibility, not a lock claudemux takes. (Relatedly, the upfront existence check inside `adopt()` is a **courtesy fast-fail, not a guarantee** — TOCTOU means the first op on the handle can still throw `SessionGone`/`BackendUnreachable` if the session dies in between.)
+
+#### ⚠️ Never blindly clear a dialog on a session you didn't boot
+
+`state()` reports **every** dialog as the single generic value `"dialog"` — it cannot tell a benign boot dialog from the workspace-trust dialog. An adopted session may be sitting at a workspace-trust prompt some other process left it at, and `send()`-ing a key to clear it **answers a persistent, global, per-cwd authority grant** (the same grant `create()` deliberately fails closed on — see [Workspace trust](#workspace-trust-fail-closed)) with no error and no second chance. **Never `send()` to a `dialog`-state session you did not boot yourself without first inspecting `capture()`** to confirm it is not the trust dialog.
+
+#### Recovering many sessions at once — watch for the storm
+
+Because a cleanly-down backend server reports `false` for *every* session, all your `adopt()` calls return `SessionGone` at the same instant — and "re-create N sessions with `--resume`" fired N times against a host whose backend just restarted is a recovery storm. **If you're recovering more than one session and they *all* report `SessionGone`, probe `list()`/`exists()` once for the batch before re-creating.** A uniformly-empty result is a server-restart event, not N independent session deaths.
+
 ## 5. State model
 
 `state()` and `wait()` report one of five values. The classifier scans only the bottom-N lines of the pane, so a stray match in scrollback can't fire by construction.

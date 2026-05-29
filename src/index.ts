@@ -24,6 +24,8 @@ export {
   WorkspaceUntrusted,
 } from "./errors.js";
 
+export { adopt } from "./session/adopt.js";
+export type { AdoptOptions } from "./session/adopt.js";
 export { create } from "./session/create.js";
 export { exists, kill, list } from "./session/registry.js";
 

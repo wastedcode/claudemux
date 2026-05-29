@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`adopt()`** — the public mirror of `create()`: re-attach to a session that
+  is already live but was started by another process (the daemon/process-restart
+  recovery path). Pure attach — asserts the session exists, returns a handle; no
+  spawn, no boot, no dialog dismissal. Throws `SessionGone` when the session is
+  absent (including a cleanly-down backend), symmetric with `create()`'s
+  `SessionExists`. **Additive / non-breaking** — no existing API changes. See
+  README §"Re-adopting a live session after a restart" for the A/B/C recovery
+  taxonomy, the persist-both / single-writer / trust-dialog contracts, and
+  `examples/adopt-after-restart.ts` for the runnable recovery loop.
+
 ## [0.0.1] - 2026-05-28
 
 ### Added

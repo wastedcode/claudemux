@@ -1,0 +1,77 @@
+import { claude as defaultAgent } from "../agents/claude.js";
+import type { AgentDef } from "../agents/types.js";
+import type { Backend, SessionRef } from "../backends/types.js";
+import { SessionGone } from "../errors.js";
+import type { SessionHandle } from "../types.js";
+import { DEFAULT_NAMESPACE } from "./constants.js";
+import { sharedDefaultBackend } from "./default-backend.js";
+import { attachHandle } from "./handle.js";
+import { formatSessionLabel } from "./ref.js";
+import { validateNamePart } from "./validate.js";
+
+/**
+ * Options for {@link adopt}. Mirrors {@link CreateOptions} minus the spawn-only
+ * fields (`cwd`, `extraArgs`, `env`, `bootTimeoutMs`, `trustWorkspace`) — adopt
+ * neither spawns nor boots.
+ */
+export interface AdoptOptions {
+  /** Name of the session to re-adopt; must match the live session's name. */
+  name: string;
+  /** Namespace prefix (default: `"claudemux"`). Must match the live session's namespace. */
+  namespace?: string;
+  /**
+   * Agent definition controlling state/idle classification (default: claude).
+   * MUST be the same agent the original `create()` used — the classifier reads
+   * THIS agent's `rules`, not the session's. Passing the wrong agent silently
+   * misclassifies `state()`/`wait()`. See README §adopt.
+   */
+  agent?: AgentDef;
+  /** Backend the live session runs in (default: the process-wide shared default — stable socket). */
+  backend?: Backend;
+}
+
+/**
+ * Re-adopt a session that is already live but was created by another process —
+ * the mirror of {@link create}. Pure attach: no spawn, no boot, no dialog dismissal.
+ *
+ * After a successful adopt the consumer MUST call `state()` before driving the
+ * pane (covers wedged / PaneDead / mid-dialog). See README §adopt for the A/B/C
+ * recovery taxonomy and the single-writer invariant.
+ *
+ * @throws `InvalidSessionName` if `name`/`namespace` contain reserved characters
+ *   (thrown before the exists-check).
+ * @throws `SessionGone` if no such session exists — incl. the whole backend
+ *   server being down, which `exists()` reports as absence.
+ *
+ * @example
+ * ```ts
+ * import { adopt, SessionGone } from "claudemux";
+ * try {
+ *   const session = await adopt({ name: "job" });
+ *   await session.state(); // ALWAYS call state() before driving the pane
+ * } catch (err) {
+ *   if (err instanceof SessionGone) {
+ *     // process exited — re-create with `--resume <agentSessionId>`
+ *   }
+ * }
+ * ```
+ */
+export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
+  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
+  validateNamePart("namespace", namespace);
+  validateNamePart("name", opts.name);
+  const agent = opts.agent ?? defaultAgent;
+  const backend = opts.backend ?? sharedDefaultBackend();
+  const ref: SessionRef = { namespace, name: opts.name };
+
+  // Mirror of create()'s exists-check, inverted. adopt REQUIRES the session to
+  // be present; absence (including whole-server-down, which exists() collapses
+  // to false) is SessionGone — the symmetric counterpart to SessionExists.
+  if (!(await backend.exists(ref))) {
+    throw new SessionGone(formatSessionLabel(ref));
+  }
+
+  // Pure attach — no spawn, no boot, no dialog dismissal. The consumer MUST call
+  // state() after adopt to learn where the live pane stands.
+  return attachHandle({ backend, agent, namespace, name: opts.name });
+}
