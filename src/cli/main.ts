@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { ClaudemuxError } from "../errors.js";
 import { captureCli } from "./capture.js";
 import { existsCli } from "./exists.js";
+import { interruptCli } from "./interrupt.js";
 import { killCli } from "./kill.js";
 import { listCli } from "./list.js";
 import { sendCli } from "./send.js";
@@ -68,6 +69,12 @@ export function buildProgram(): Command {
         await sendCli(name, text, opts);
       },
     );
+
+  common(program.command("interrupt <name>"))
+    .description("fire ESC at the session to stop a working agent (harmless when idle)")
+    .action(async (name: string, opts: { namespace?: string; agent?: string; socket?: string }) => {
+      await interruptCli(name, opts);
+    });
 
   common(program.command("wait <name>"))
     .description("block until the session reaches idle/permission-prompt/dialog")

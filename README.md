@@ -32,7 +32,7 @@ Requires Node ≥20 and a working `claude` CLI on `PATH` (you've run `claude` in
 
 ## 3. CLI usage
 
-The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "...")` on the library side. Same eight verbs, one vocabulary.
+The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "...")` on the library side. Same nine verbs, one vocabulary.
 
 ```sh
 $ npm i claudemux
@@ -52,6 +52,7 @@ The full verb set:
 |---|---|
 | `spawn <name> --cwd <path>` | Start a session; dismiss boot dialogs; return when ready |
 | `send <name> <text>` | Deliver multi-line text as one logical user turn (use `-` to pipe from stdin) |
+| `interrupt <name>` | Fire ESC to stop a working agent (harmless when idle — clears the input box) |
 | `wait <name>` | Block until idle / permission-prompt / dialog; prints the state |
 | `state <name>` | Print the current state (no blocking) |
 | `capture <name>` | Print the pane text; `--ansi` keeps escape codes |
@@ -89,6 +90,35 @@ await exists({ name: "job" });        // boolean
 await list();                         // string[] of names in the default namespace
 await kill({ name: "job" });          // idempotent
 ```
+
+### Interrupting a working agent (`interrupt()`)
+
+`interrupt()` fires a single ESC — claude's own interrupt key — at the session, stopping a working turn. ESC is sent **regardless of state**; it's meaningful only when the agent is `working`. ESC on an idle claude is harmless, so the substrate does not guard on state — gate on `state()` yourself if you care. The verb does exactly one thing (stop the turn) and bundles no follow-up.
+
+```ts
+if ((await session.state()) === "working") {
+  await session.interrupt();   // ESC + brief settle; the turn stops
+}
+```
+
+> ⚠️ **After `interrupt()`, `state()` reads `unknown` — not `idle`.** claude does not return to a clean prompt: it **restores the interrupted message back into the composer**. Two things follow, and missing either corrupts your next turn:
+>
+> - **Do not `wait()`-for-idle after `interrupt()`.** `wait()` settles a turn it observed *run* (it arms on the baseline `send` writes). After an interrupt no turn is in flight and no baseline exists, and the frame is `unknown`, so `wait()` never settles — it times out (`ReplTimeout`).
+> - **Do not naively `send()` a replacement after `interrupt()`.** `send()` pastes into the *non-empty* composer (the restored message), so what gets submitted is the two texts concatenated.
+
+**Interrupt and replace** (claude-specific; there is deliberately no `interruptAndSend()`). To send a clean replacement you must first clear the restored composer. claude's only substrate-reachable composer clear is repeated ESC (its *"Esc again to clear"* ladder — `interrupt()` again), so clear by **observing the composer empty**, not by blind-counting keystrokes:
+
+```ts
+// claude-specific, verified against current claude — observe, don't assume a fixed ESC count.
+await session.interrupt();                       // ESC #1: stop the turn (composer now holds the old prompt)
+for (let i = 0; i < 4 && composerHasText(await session.capture()); i++) {
+  await session.interrupt();                     // ESC: claude clears the composer (today ~2 more)
+}
+await session.send("actually, do X instead");    // clean replacement — composer was empty
+await session.wait();                            // settles the new turn (send() armed it)
+```
+
+`interrupt()` guarantees ESC was delivered plus a brief settle — **not** that a *slow* in-flight abort (e.g. a long-running tool call) has fully torn down. If you must be certain the turn died before replacing it, poll `state()` until it is no longer `working` first. This confirmation is consumer policy, not a substrate guarantee.
 
 Typed errors — all extend `ClaudemuxError`:
 

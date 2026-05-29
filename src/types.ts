@@ -70,6 +70,29 @@ export interface SessionHandle {
   send(text: string): Promise<void>;
 
   /**
+   * Fire `Escape` at the pane — claude's own interrupt key — to stop a
+   * working agent.
+   *
+   * ESC is sent regardless of state; it is meaningful only when
+   * `state === working`. ESC on an idle claude is harmless — it clears the
+   * input box. The consumer gates on `state()` if they care.
+   *
+   * Blocks on write delivery plus a brief settle; it guarantees ESC was
+   * delivered, NOT that an in-flight abort has fully completed. It does exactly
+   * one thing — stop the turn — and bundles no follow-up.
+   *
+   * **After interrupt(), `state()` reads `unknown`, not `idle`:** claude
+   * restores the interrupted message into the composer rather than returning to
+   * a clean prompt. So do **not** `wait()`-for-idle after interrupt() (it never
+   * settles — no turn is in flight), and do **not** naively `send()` a
+   * replacement (it pastes onto the restored text and submits the
+   * concatenation). Clean "interrupt and replace" requires clearing the
+   * composer first — a consumer-composed, claude-specific recipe documented in
+   * the README, deliberately not folded into this agent-agnostic verb.
+   */
+  interrupt(): Promise<void>;
+
+  /**
    * Block until the classifier reports {@link IdleState}.
    *
    * @throws `ReplTimeout` if `opts.timeoutMs` (default 300_000ms) elapses

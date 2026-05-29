@@ -10,7 +10,15 @@ export default defineConfig({
     // re-introduced in v0.1. It is kept out of the general suite / required-check
     // gate here so no stray `CLAUDEMUX_LIVE_PERMISSION_PROMPTS=1` can fire
     // un-isolated live claude in the gatekeeper path. See the file header.
-    exclude: [...configDefaults.exclude, "test/fixtures/permission-prompts.test.ts"],
+    exclude: [
+      ...configDefaults.exclude,
+      "test/fixtures/permission-prompts.test.ts",
+      // interrupt.live.test.ts spawns a REAL authenticated claude (gated by
+      // CLAUDEMUX_LIVE_INTERRUPT=1) — same reason as the permission-prompts
+      // replay: keep live claude out of the gatekeeper path; it runs only under
+      // the dedicated network-isolated live workflow.
+      "test/session/interrupt.live.test.ts",
+    ],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // Integration tests touch the real ~/.claude/.do-not-touch-sentinel file

@@ -55,16 +55,36 @@ describe("CLI — bin/claudemux exists and is runnable", () => {
     expect(existsSync(binPath)).toBe(true);
   });
 
-  it("--help works and contains the 8 verb names", async () => {
+  it("--help works and contains the 9 verb names", async () => {
     const r = await runCli(["--help"]);
     expect(r.exit).toBe(0);
-    for (const verb of ["spawn", "send", "wait", "state", "capture", "kill", "list", "exists"]) {
+    for (const verb of [
+      "spawn",
+      "send",
+      "interrupt",
+      "wait",
+      "state",
+      "capture",
+      "kill",
+      "list",
+      "exists",
+    ]) {
       expect(r.stdout).toContain(verb);
     }
   });
 
   it("--help output for every verb has ZERO references to 'tmux'", async () => {
-    const verbs = ["spawn", "send", "wait", "state", "capture", "kill", "list", "exists"];
+    const verbs = [
+      "spawn",
+      "send",
+      "interrupt",
+      "wait",
+      "state",
+      "capture",
+      "kill",
+      "list",
+      "exists",
+    ];
     const r0 = await runCli(["--help"]);
     expect(r0.stdout.toLowerCase()).not.toContain("tmux");
     for (const v of verbs) {

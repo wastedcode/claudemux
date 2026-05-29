@@ -1,5 +1,6 @@
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
+import { interruptOnce } from "../io/interrupt.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForState } from "../io/wait.js";
@@ -28,6 +29,7 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     name: deps.name,
     namespace: deps.namespace,
     send: (text) => mutex.run(() => sendOnce(deps.backend, deps.agent, ref, text)),
+    interrupt: () => mutex.run(() => interruptOnce(deps.backend, ref)),
     wait: (opts?: ReadyOpts) =>
       mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
     state: () => mutex.run(() => readState(deps.backend, deps.agent, ref)),
