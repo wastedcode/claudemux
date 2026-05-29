@@ -21,11 +21,15 @@ export class ClaudemuxError extends Error {
 
 /**
  * Thrown by {@link create} when a session with the requested name already
- * exists. The substrate never silently adopts an existing session.
+ * exists. The substrate never silently adopts an existing session — reconnect
+ * to the live session with {@link adopt} instead.
  */
 export class SessionExists extends ClaudemuxError {
   constructor(sessionName: string) {
-    super("session already exists; refusing to silently adopt", sessionName);
+    super(
+      "session already exists; refusing to silently adopt — use adopt() to reconnect to a live session",
+      sessionName,
+    );
   }
 }
 
