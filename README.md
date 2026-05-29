@@ -109,14 +109,16 @@ if ((await session.state()) === "working") {
 **Interrupt and replace** (claude-specific; there is deliberately no `interruptAndSend()`). To send a clean replacement you must first clear the restored composer. claude's only substrate-reachable composer clear is repeated ESC (its *"Esc again to clear"* ladder — `interrupt()` again), so clear by **observing the composer empty**, not by blind-counting keystrokes:
 
 ```ts
-// claude-specific, verified against current claude — observe, don't assume a fixed ESC count.
-await session.interrupt();                       // ESC #1: stop the turn (composer now holds the old prompt)
-for (let i = 0; i < 4 && composerHasText(await session.capture()); i++) {
-  await session.interrupt();                     // ESC: claude clears the composer (today ~2 more)
+// claude-specific, verified against current claude — observe the composer empty, don't assume a fixed ESC count.
+await session.interrupt();                        // ESC #1: stop the turn (composer now holds the old prompt)
+for (let i = 0; i < 4 && (await session.capture()).includes(oldPromptSnippet); i++) {
+  await session.interrupt();                      // each ESC walks claude's "Esc again to clear" ladder (today ~2 more)
 }
-await session.send("actually, do X instead");    // clean replacement — composer was empty
-await session.wait();                            // settles the new turn (send() armed it)
+await session.send("actually, do X instead");     // clean replacement — composer is empty
+await session.wait();                             // settles the new turn (send() armed it)
 ```
+
+(`oldPromptSnippet` is a distinctive substring of the instruction you interrupted — a cheap "is the restored prompt still in the composer?" check on `capture()`.)
 
 `interrupt()` guarantees ESC was delivered plus a brief settle — **not** that a *slow* in-flight abort (e.g. a long-running tool call) has fully torn down. If you must be certain the turn died before replacing it, poll `state()` until it is no longer `working` first. This confirmation is consumer policy, not a substrate guarantee.
 
