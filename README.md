@@ -101,6 +101,8 @@ if ((await session.state()) === "working") {
 }
 ```
 
+Gating on `state()` like this is **not atomic** with the interrupt — there's a window between the read and the ESC landing. It matters most from the CLI, where `state` and `interrupt` are *separate processes*: a short turn can finish in the gap, so the ESC reaches an already-idle agent. That's a harmless no-op (it clears the input box), not an error — but if you need the interrupt to reliably catch a turn, do the `state()` check and `interrupt()` in one **tight in-process sequence**, and don't trust a `working` reading carried over from an earlier separate process.
+
 > ⚠️ **After `interrupt()`, `state()` reads `unknown` — not `idle`.** claude does not return to a clean prompt: it **restores the interrupted message back into the composer**. Two things follow, and missing either corrupts your next turn:
 >
 > - **Do not `wait()`-for-idle after `interrupt()`.** `wait()` settles a turn it observed *run* (it arms on the baseline `send` writes). After an interrupt no turn is in flight and no baseline exists, and the frame is `unknown`, so `wait()` never settles — it times out (`ReplTimeout`).

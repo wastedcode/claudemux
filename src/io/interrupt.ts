@@ -27,6 +27,13 @@ const INTERRUPT_SETTLE_MS = 250;
  * is a mechanism, not a policy
  * (`brain/decisions/0013-mechanism-not-policy-substrate-boundary.md`).
  *
+ * That consumer-side gate is also not atomic with the ESC: a turn can finish
+ * between a `state()===working` read and the ESC landing — most easily across
+ * separate CLI processes (a short turn completes in the gap), so the ESC hits
+ * an already-idle agent. That is a harmless no-op, not a failure; a consumer
+ * that needs the interrupt to catch a turn should read `state()` and call this
+ * in one tight in-process sequence, not trust a stale prior-process reading.
+ *
  * Blocks on **write delivery** plus a brief fixed settle ({@link
  * INTERRUPT_SETTLE_MS}); it guarantees ESC was delivered, NOT that an in-flight
  * abort has fully completed. This verb does exactly one named action — stop the
