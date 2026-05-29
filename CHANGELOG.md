@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`interrupt()`** — stop a working agent. Fires a single ESC (claude's own
+  interrupt key) at the session through the per-handle mutex, same as
+  `send`/`wait`. Mechanism, not policy: ESC is sent **regardless of state** and
+  is meaningful only when the agent is `working`; on an idle claude it harmlessly
+  clears the input box, so the substrate does not guard on state. The verb does
+  exactly one thing (stop the turn) and bundles no follow-up. **Additive /
+  non-breaking.** Note: after `interrupt()`, `state()` reads `unknown` (claude
+  restores the interrupted message into the composer), so do **not**
+  `wait()`-for-idle or naively `send()` a replacement — see README
+  §"Interrupting a working agent" for the clean interrupt-and-replace recipe
+  (clear the restored composer to empty, then `send`) and the slow-abort caveat.
+  Mirrored on the CLI as `claudemux interrupt <name>`.
 - **`adopt()`** — the public mirror of `create()`: re-attach to a session that
   is already live but was started by another process (the daemon/process-restart
   recovery path). Pure attach — asserts the session exists, returns a handle; no
