@@ -70,7 +70,7 @@ jobs:
 
       - name: Install tmux build deps (macOS)
         if: runner.os == 'macOS' && steps.cache-tmux.outputs.cache-hit != 'true'
-        run: brew install libevent ncurses bison pkg-config automake autoconf
+        run: brew install libevent ncurses bison pkg-config automake autoconf utf8proc
 
       - name: Build tmux ${{ matrix.tmux }} from source
         if: steps.cache-tmux.outputs.cache-hit != 'true'
@@ -81,7 +81,14 @@ jobs:
           mkdir -p tmux-${{ matrix.tmux }}
           tar xzf tmux.tar.gz -C tmux-${{ matrix.tmux }} --strip-components 1
           cd tmux-${{ matrix.tmux }}
-          ./configure --prefix=$HOME/tmux-${{ matrix.tmux }}/install
+          # macOS tmux configure refuses to proceed without an explicit
+          # utf8proc choice ("library support for Unicode is very poor").
+          # Enable it (recommended) — correct codepoint width matters for the
+          # pane-scanning classifier and the ❯ ready-marker. Linux doesn't
+          # require the flag, so leave its build untouched.
+          UTF8PROC_FLAG=""
+          if [ "$RUNNER_OS" = "macOS" ]; then UTF8PROC_FLAG="--enable-utf8proc"; fi
+          ./configure --prefix=$HOME/tmux-${{ matrix.tmux }}/install $UTF8PROC_FLAG
           make -j2
           make install
 
