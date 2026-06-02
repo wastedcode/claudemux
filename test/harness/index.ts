@@ -1,5 +1,6 @@
 import { type SpawnOptions, spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { type SandboxHome, disposeSandboxHome, mintSandboxHome } from "./sandbox.js";
 import { type Sentinel, plantSentinel, verifySentinel } from "./sentinel.js";
 import { mintSocket, tmuxArgs } from "./socket.js";
@@ -28,6 +29,25 @@ const NODE_BIN_DIR = dirname(process.execPath);
 const CURATED_PATH = [NODE_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
   .filter((d, i, a) => a.indexOf(d) === i)
   .join(":");
+
+/**
+ * Directory holding the real `claude` binary, resolved from the *ambient* PATH
+ * — the one sanctioned exception to the curated-env rule. The pre-auth boot
+ * tests need claude's actual location injected onto the otherwise-hermetic
+ * PATH so they can reach an installed-but-unauthenticated claude (per ADR 0005:
+ * CI installs claude, never logs in; the pre-auth LoginRequired path is what CI
+ * exercises). Resolve it — never hardcode a home: on a dev box claude is on PATH
+ * at $HOME/.local/bin; in CI the install step adds the same to $GITHUB_PATH, but
+ * the literal home differs (/home/runner, /Users/runner). Hardcoding one box's
+ * path is the exact PATH-mismatch ADR 0005 flagged.
+ */
+export function claudeBinDir(): string {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync(join(dir, "claude"))) return dir;
+  }
+  // Canonical install location (claude.ai/install.sh → $HOME/.local/bin).
+  return join(process.env.HOME ?? "", ".local", "bin");
+}
 
 /** One curated env, built fresh per harness — never derived from `process.env`. */
 function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> {
