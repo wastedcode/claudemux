@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-02
+
 ### Added
 
 - **`agentSessionId`** — every session now has a stable, opaque, backend-neutral
@@ -96,4 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows-native is not supported. tmux is Unix-only; WSL is
   community-contributable, undocumented by the maintainers.
 
+[Unreleased]: https://github.com/wastedcode/claudemux/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/wastedcode/claudemux/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/wastedcode/claudemux/releases/tag/v0.0.1
