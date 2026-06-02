@@ -1,4 +1,5 @@
 import { type SpawnOptions, spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { type SandboxHome, disposeSandboxHome, mintSandboxHome } from "./sandbox.js";
 import { type Sentinel, plantSentinel, verifySentinel } from "./sentinel.js";
 import { mintSocket, tmuxArgs } from "./socket.js";
@@ -18,6 +19,16 @@ import { mintSocket, tmuxArgs } from "./socket.js";
  *     PGID. Name-based matching (`pkill claude`, etc.) is banned tree-wide.
  */
 
+// The curated PATH must include the directory of the *running* node, so the
+// CLI bin's `#!/usr/bin/env node` shebang resolves wherever node is installed
+// (e.g. the GitHub Actions hosted toolcache, not /usr/bin). Hardcoding only
+// /usr/bin works on a dev box but fails exit-127 on CI runners. Prepend the
+// real node dir while still NOT inheriting the rest of `process.env`.
+const NODE_BIN_DIR = dirname(process.execPath);
+const CURATED_PATH = [NODE_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
+  .filter((d, i, a) => a.indexOf(d) === i)
+  .join(":");
+
 /** One curated env, built fresh per harness — never derived from `process.env`. */
 function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> {
   return {
@@ -29,7 +40,7 @@ function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> 
     TMUX_SOCKET: socket,
     LC_ALL: "C.UTF-8",
     TERM: "xterm-256color",
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PATH: CURATED_PATH,
   };
 }
 
