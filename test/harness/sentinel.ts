@@ -35,6 +35,19 @@ export function plantSentinel(): Sentinel {
 }
 
 /**
+ * Tolerance (ms) for the mtime comparison. `mtimeMs` is a float derived from
+ * the stat's nanosecond `mtim`; at epoch magnitude (~1.78e12) its ULP is
+ * ~2e-4 ms, and a `utimes` restore round-trips with a few-µs drift — so exact
+ * `!==` is unsound and false-positives on filesystems that record sub-second
+ * mtimes (CI), where a test that restores the sentinel can't reproduce the
+ * exact float. A real leak is a genuine write that advances mtime to wall-clock
+ * "now" — at least milliseconds, in practice seconds (claude booting + writing
+ * config) after the sentinel was planted — so 1 ms cleanly separates jitter
+ * (~µs) from a leak (≫ ms) without weakening the trip-wire.
+ */
+const MTIME_TOLERANCE_MS = 1;
+
+/**
  * Verify the sentinel's mtime is unchanged. Returns `null` on success,
  * or a description of the leak on failure. The test asserts on the return
  * value so the assertion failure surfaces the offending test by name.
@@ -46,7 +59,7 @@ export function verifySentinel(sentinel: Sentinel): string | null {
   } catch (err) {
     return `sentinel disappeared: ${sentinel.path} (${(err as Error).message})`;
   }
-  if (nowMtimeMs !== sentinel.mtimeMs) {
+  if (Math.abs(nowMtimeMs - sentinel.mtimeMs) >= MTIME_TOLERANCE_MS) {
     return `sentinel mtime moved: ${sentinel.path} (${sentinel.mtimeMs} → ${nowMtimeMs}) — sandbox HOME leaked into the real ~/.claude/`;
   }
   return null;
