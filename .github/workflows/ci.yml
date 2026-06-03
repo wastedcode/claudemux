@@ -87,7 +87,17 @@ jobs:
           # pane-scanning classifier and the ❯ ready-marker. Linux doesn't
           # require the flag, so leave its build untouched.
           UTF8PROC_FLAG=""
-          if [ "$RUNNER_OS" = "macOS" ]; then UTF8PROC_FLAG="--enable-utf8proc"; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            UTF8PROC_FLAG="--enable-utf8proc"
+            # Homebrew keg paths aren't on the default compiler/pkg-config
+            # search path. Newer tmux (3.4/3.5a) finds utf8proc via pkg-config;
+            # older tmux (3.2a) does a bare AC_CHECK_HEADER and needs the -I/-L
+            # explicitly, else "utf8proc.h ... no / utf8proc not found".
+            UTF8PROC_PREFIX="$(brew --prefix utf8proc)"
+            export PKG_CONFIG_PATH="$UTF8PROC_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            export CPPFLAGS="-I$UTF8PROC_PREFIX/include ${CPPFLAGS:-}"
+            export LDFLAGS="-L$UTF8PROC_PREFIX/lib ${LDFLAGS:-}"
+          fi
           ./configure --prefix=$HOME/tmux-${{ matrix.tmux }}/install $UTF8PROC_FLAG
           make -j2
           make install

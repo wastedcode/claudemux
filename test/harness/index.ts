@@ -20,13 +20,27 @@ import { mintSocket, tmuxArgs } from "./socket.js";
  *     PGID. Name-based matching (`pkill claude`, etc.) is banned tree-wide.
  */
 
-// The curated PATH must include the directory of the *running* node, so the
-// CLI bin's `#!/usr/bin/env node` shebang resolves wherever node is installed
-// (e.g. the GitHub Actions hosted toolcache, not /usr/bin). Hardcoding only
-// /usr/bin works on a dev box but fails exit-127 on CI runners. Prepend the
-// real node dir while still NOT inheriting the rest of `process.env`.
+/** Directory of `cmd` as found on the *ambient* PATH, or null if not found. */
+function binDirOnPath(cmd: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync(join(dir, cmd))) return dir;
+  }
+  return null;
+}
+
+// The curated PATH must include the dirs of the tools the curated-env children
+// actually exec, since it does NOT inherit the rest of `process.env`:
+//   - the running node, so the CLI bin's `#!/usr/bin/env node` shebang resolves
+//     wherever node lives (e.g. the Actions hosted toolcache, not /usr/bin);
+//   - the tmux the matrix built from source (added to $GITHUB_PATH, ambient
+//     only). Hardcoding /usr/bin masks this on Linux — which ships a preinstalled
+//     tmux — but breaks macOS, where the only tmux is the from-source one outside
+//     /usr/bin, so a CLI subprocess can't find it and exits non-zero. Resolving
+//     it also makes Linux exercise the matrix version, not the preinstalled one.
 const NODE_BIN_DIR = dirname(process.execPath);
-const CURATED_PATH = [NODE_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
+const TMUX_BIN_DIR = binDirOnPath("tmux");
+const CURATED_PATH = [NODE_BIN_DIR, TMUX_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
+  .filter((d): d is string => d !== null)
   .filter((d, i, a) => a.indexOf(d) === i)
   .join(":");
 
@@ -42,11 +56,8 @@ const CURATED_PATH = [NODE_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
  * path is the exact PATH-mismatch ADR 0005 flagged.
  */
 export function claudeBinDir(): string {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && existsSync(join(dir, "claude"))) return dir;
-  }
   // Canonical install location (claude.ai/install.sh → $HOME/.local/bin).
-  return join(process.env.HOME ?? "", ".local", "bin");
+  return binDirOnPath("claude") ?? join(process.env.HOME ?? "", ".local", "bin");
 }
 
 /** One curated env, built fresh per harness — never derived from `process.env`. */
