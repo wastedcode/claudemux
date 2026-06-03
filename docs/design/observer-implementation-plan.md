@@ -228,13 +228,14 @@ used the interface. Both surfaced real holes. The three §7-open questions are n
 the findings, and one new architectural decision emerged.
 
 **Critical (fix before building):**
-- **C1. Cursor must be nonce-anchored, not count/offset.** A count cursor can't attribute
-  blocks to the right `send()` (two rapid sends bracket the same output) and **claude
-  compaction rewrites the `.jsonl` mid-session** → a count/offset cursor silently returns `[]`
-  or garbage. FIX: `send()` injects a per-turn **nonce** + positively identifies its own
-  user-record; `Cursor = {transcriptPath, transcriptGenerationToken, anchorNonce}`;
-  `messagesSince` throws typed **`CursorInvalidated`** when the anchor is no longer resolvable
-  (compaction) — **never** returns `[]`. This resolves §7-Q1 (cursor encoding).
+- **C1. Cursor must be nonce-anchored, not count/offset** — for *rapid-send attribution* (two
+  sends bracket the same output). **Compaction half DOWNGRADED by spike 2:** manual `/compact`
+  is **append-only** (file grew, no rewrite/fork) so a count cursor is *not* invalidated, *and*
+  **`PreCompact` fires** as an explicit signal. FIX: `send()` injects a per-turn **nonce** +
+  identifies its own user-record; `Cursor = {transcriptPath, anchorNonce}`; subscribe to
+  `PreCompact`; keep `CursorInvalidated` as **insurance** (ship the typed error) in case
+  auto-compaction at context-limit rewrites — which is **UNTESTED, the one open compaction risk.**
+  Resolves §7-Q1.
 - **C2. "Never hangs" vs "`wait()` no-opts waits forever" are contradictory.** FIX: **`maxMs`
   is mandatory** (resolves §7-Q3). Zero-arg `wait()` is removed; a true hang resolves
   `budget-exceeded` at the consumer's ceiling.
@@ -317,17 +318,21 @@ never on scraping the TUI. Concretely:
 - **`capture()` / pane-hash** are diagnostic + a *marked-unreliable* fallback only, surfaced via
   `hookChannelHealthy: false`.
 
-**Honest residual (can't reach literal zero-tmux-observe today):**
-1. **Pre-transcript boot dialogs** (workspace-trust, login) fire before any hook/transcript and
-   are pane-modal. **Shrink plan:** pre-configure workspace trust + treat the **`SessionStart`
-   hook** as the ready signal (spike confirmed it fires once the session starts), so boot
-   readiness stops depending on scraping `❯`. Any dialog still needing a keystroke is the
-   irreducible minimum, isolated in `agents/claude.ts`, fixtured.
-2. **Externally-induced interrupt** (a founder hits ESC in an attached tmux) has no hook and no
-   our-flag → pane-phrase fallback only. Marked unreliable.
+**Honest residual (measured in spike 2 — can't reach literal zero-tmux-observe today):**
+1. **Pre-transcript boot dialogs** (workspace-trust, login) — pane-modal, before any
+   hook/transcript. **Shrink plan:** pre-set `~/.claude.json` → `projects["<dir>"].
+   hasTrustDialogAccepted` (mechanism confirmed in spike 2) + treat `SessionStart` as ready, so
+   boot stops scraping `❯`. ⚠ End-to-end skip-validation deferred (won't write the live file
+   with sessions running). Residual keystroke-dialogs isolated in `agents/claude.ts`, fixtured.
+2. **Mid-turn permission prompts** (prompting modes only — `default`/`acceptEdits`/`plan`).
+   Spike 2: no timely hook (`Notification` only after ~60s); the `Do you want to…?` pane dialog
+   is the instant signal. → `awaiting:"permission"` is **pane-detected**. **Moot under
+   bypassPermissions** (founder's default → no prompts), so most consumers never hit this.
+3. **AskUserQuestion** — *enabled*: hook-detectable (`PreToolUse` `tool_name:"AskUserQuestion"`)
+   + pane dialog. *Disabled* (Posse default): asks in chat → undetectable (C8 — consumer reads content).
+4. **Externally-induced interrupt** — no hook, no our-flag → pane-phrase fallback only. Marked unreliable.
 
-**Follow-up spike (owed, to drive the residual down):** does a permission prompt / other blocked
-state fire a `Notification`/`PermissionRequest` hook (so `awaiting:"permission"` is hook-derived,
-not pane)? Can boot be made hook-only via pre-trust + `SessionStart`? These determine how close to
-zero-tmux-observe we get. Until measured, the contract states plainly which signals are
-hook-backed (reliable) vs pane-fallback (best-effort).
+**Follow-up spike: DONE** (see read-write-split.md §"Spike 2 findings"). Net: hooks reliably cover
+lifecycle/done/content; the pane is required only for boot dialogs + (prompting-mode) permission
+prompts + external interrupt — a small, named set, mostly moot under bypass. **One open item
+remains: auto-compaction at context-limit** (manual `/compact` proved append-only; auto untested).

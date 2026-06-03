@@ -213,6 +213,40 @@ the thinking-vs-hung signal behavior. Findings appended below as data lands.
 - **Incidental:** this claude blocks standalone `sleep` via a tool-guard — consumer claude
   configs vary; the substrate can't assume tool behavior.
 
+### Spike 2 findings (§9 follow-up — verify, never assume; isolated socket, sessions untouched)
+
+- **Permission prompt → NO timely hook.** In `default` mode a `Write` suspended the turn
+  (`PreToolUse` fired, no `PostToolUse`, no `Stop`); pane showed `Do you want to create…? ❯
+  1.Yes/2.Yes,allow all/3.No`. **No `Notification` for the first ~12s; it fired by ~65s.** So
+  `awaiting:"permission"` is **pane-detected (instant)** with `Notification` as a slow (~60s)
+  backstop — the hook state is identical to a long-running tool. Pane-required for prompting
+  modes; **moot under bypassPermissions** (founder's default → no prompts). Esc cancels a prompt.
+  (Note: this claude auto-ran `echo` in default mode — simple tools don't gate here.)
+- **Interrupt re-confirmed (no guard confound): ESC fires NO `Stop`.** Pane `⎿ Interrupted ·
+  What should Claude do instead?` only. → `aborted:"interrupted"` from in-process flag / pane,
+  never a hook.
+- **Compaction (`/compact`) is APPEND-ONLY — C2 premise NOT confirmed.** File GREW (39→52 lines,
+  same session-id, no fork); old records not rewritten. So a count/offset cursor is **not**
+  invalidated by manual compact, *and* **`PreCompact` fires** as an explicit signal. The
+  red-team's "compaction silently rewrites → cursor lies" is unconfirmed for `/compact`.
+  ⚠ Auto-compaction at context-limit NOT tested — still open; treat with caution.
+- **Transcript schema is RICH — ~20 record types**, not `user`/`assistant` only: `message`,
+  `text`, `thinking`, `tool_use`, `tool_result`, `file-history-snapshot`, `permission-mode`,
+  `mode`, `bridge-session`, `ai-title`, `deferred_tools_delta`, `skill_listing`, `system`,
+  `attachment`, `last-prompt`, … The parser must target conversation records specifically and be
+  heavily fixtured; `message` vs `user`/`assistant` needs dedicated study.
+- **AskUserQuestion ENABLED is detectable**: `PreToolUse` with `tool_name:"AskUserQuestion"` +
+  pane dialog, suspends (no Stop). DISABLED (Posse default) → asks in chat → mechanically
+  `completed`, structurally undetectable (confirms C8).
+- **Boot/trust mechanism identified:** trust persists at `~/.claude.json` →
+  `projects["<dir>"].hasTrustDialogAccepted`. Pre-trust → hook-only boot is *mechanically*
+  possible; **end-to-end skip-validation DEFERRED for safety** (won't read-modify-write the
+  live file with 5 sessions running). Not assumed — flagged as verified-location / unproven-skip.
+- **Hook events valid in 2.1.161** (claude accepted all 9 wired): SessionStart, SessionEnd,
+  UserPromptSubmit, Stop, SubagentStop, Notification, PreCompact, PreToolUse, PostToolUse.
+  Observed firing: all but SessionEnd (fires on end). A stray `SubagentStop` recurs after `Stop`
+  on non-subagent turns — anomaly, don't rely on it.
+
 ## Converged design decisions (spike + two persona reviews)
 
 The OSS-architect and Posse-builder reviews independently converged. Decisions now firm:
