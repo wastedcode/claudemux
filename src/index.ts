@@ -38,6 +38,7 @@ export type {
   IdleState,
   Message,
   MessagePart,
+  Progress,
   ReadyOpts,
   SessionHandle,
   State,

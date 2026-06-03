@@ -45,6 +45,34 @@ export type MessagePart =
   | { readonly kind: "tool-result"; readonly ok: boolean; readonly summary: string };
 
 /**
+ * A point-in-time snapshot of a session's progress, fused from the reliable
+ * observe signals (hook edges + transcript) — **never a verdict the consumer
+ * must treat as policy**. The consumer turns staleness of these into its own
+ * patience ("progress is the agent's, time is the policy's").
+ */
+export interface Progress {
+  /**
+   * Turn phase, from the agent's hook edges (deterministic, not pane-scraped):
+   * `prompt` (turn submitted, pre-tool) · `tool` (a tool is in flight) ·
+   * `composing` (tool done, model composing) · `done` (turn ended) ·
+   * `unknown` (no hook signal — e.g. hooks off, observe degraded).
+   */
+  readonly phase: "prompt" | "tool" | "composing" | "done" | "unknown";
+  /** A tool is legitimately running (a `tool-start` with no matching `tool-end`). */
+  readonly toolInFlight: boolean;
+  /** Count of completed transcript blocks (a coarse, monotonic progress signal). */
+  readonly transcriptCount: number;
+  /**
+   * Whether the hook channel is delivering. `false` means observe has degraded
+   * to the best-effort pane fallback (hooks off, or no markers seen) — trust
+   * the reliable fields accordingly.
+   */
+  readonly hookChannelHealthy: boolean;
+  /** The fused state verdict. */
+  readonly state: State;
+}
+
+/**
  * Options governing {@link SessionHandle.wait}. v0.0.1 ships **state-mode
  * only**; `pattern` and `debounce` modes are deferred to v0.1.
  *
