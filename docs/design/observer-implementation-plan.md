@@ -4,6 +4,13 @@
 (the *why*); this is the *what/how*. Branch: `feat/read-write-split`.
 **Compat:** none owed (v0.1.x, no users). Optimize for the right surface.
 
+> **⚠ This doc describes the TARGET. `src/` is the source of truth for what EXISTS.**
+> Shipped now: transcript reader, hook spec+parser, hook injection at spawn,
+> the agent-agnostic Observer (`deriveProgress`/`observeProgress`/`readMessages`),
+> and on the handle `send()→Cursor` / `messagesSince` / `progress()`. NOT yet built:
+> `wait()→TurnOutcome`, `subscribe()`, `interruptAndReplace()`, `DeliveryUnconfirmed`,
+> the nonce cursor, the pane fallback. Don't reach for those reading the design.
+
 ## 1. Overall design — four seams, one owner each
 
 ```
@@ -95,7 +102,7 @@ type TurnOutcome =
   | { readonly kind: "completed"; readonly messages: Message[] }
   | { readonly kind: "awaiting"; readonly on: AwaitKind; readonly messages: Message[] }
   | { readonly kind: "aborted"; readonly reason: AbortReason }
-  | { readonly kind: "budget-exceeded"; readonly phase: Progress["phase"]; readonly toolInFlight: boolean; readonly messages: Message[] }
+  | { readonly kind: "budget-exceeded"; readonly reason: "idle" | "max"; readonly phase: Progress["phase"]; readonly toolInFlight: boolean; readonly messages: Message[] }  // reason: Posse's stalled(idle, safe-to-retry) vs max-exceeded(tighter-question) — MUST distinguish, not collapse
   | { readonly kind: "degraded"; readonly reason: string };   // usage-exhausted / rate-limited / error
 type AwaitKind = "permission" | "question" | (string & {});
 type AbortReason = "pane-dead" | "interrupted" | (string & {});
@@ -339,3 +346,38 @@ risks remain:** auto-compaction is docs-confirmed append-only (cursor safe); MCP
 and skills all work in driven sessions (pass `--mcp-config` through; parser handles `mcp__*`
 tool_use + skill records). The remaining risk is **maintenance, not unknown**: the transcript
 schema is undocumented/unversioned → fixture it and key on the per-record `version` field.
+
+## 10. Posse-fit acceptance (consumer validation, mid-build)
+
+A Posse-engineer persona evaluated the **current shipped surface** + Posse's real
+hand-rolled code. Verdict: **adopt the write side + observe-reads today; delete
+`transcript.ts` wholesale + the boot/readiness machinery; keep the two idle gates
+only until `wait()→TurnOutcome` ships.** The code read *cleaner than Posse's own*
+(single-source-of-truth in `claude.ts` de-duplicates their four-file sprawl;
+`deriveProgress` is pure + trivially testable).
+
+Deletes today: `transcript.ts` (claudemux `parseLine` is a superset — it even keeps
+`tool_result.ok`, which Posse's `readTimeline` drops); `paneReplReady`/boot-dialog
+machinery (claudemux's `/^❯\s*$/` per-line + typed dialogs fix their bare-`❯`
+false-positives); the activity-OR `count` branch (→ `transcriptCount`).
+
+**What 3c MUST nail (or it's a regression for Posse):**
+1. **`budget-exceeded` must carry `reason: "idle" | "max"`** — Posse acts differently on
+   stalled (safe-to-retry) vs max-exceeded (tighter question). Collapsing them re-creates
+   the exact "didn't respond in time" lie their initiative killed. (Type updated above.)
+2. **`no-answer` recoverable** — document that `budget-exceeded` with no assistant message
+   ≡ never-engaged (or give it a signal); it's Posse's most-acted-on distinction.
+3. **`idleMs` resets on the RELIABLE signal only** (transcriptCount / a hook edge), NEVER
+   pane animation — else it re-imports the C4 wall-clock-spinner lie we just removed.
+4. **`send()→DeliveryUnconfirmed`** (the lost-Enter guard) is the prerequisite for Posse to
+   delete `deliverWithConfirm`'s resend ladder. Until then they keep a thin submit-confirm.
+
+**Known gaps the validation confirmed (accept + track):**
+- **Pure-thinking-no-tool** has no positive liveness signal (toolInFlight false, transcript
+  flat, phase static) — we traded paneHash's *lie* for *no signal*, trusting the consumer's
+  `maxMs`. Correct for Posse (bypass, hooks-on); a behavior change, not a 1:1.
+- **No degraded (hooks-off) heartbeat shipped** — the marked-unreliable `paneContentHash`
+  fallback is still planned, not built. Don't delete a pane heartbeat in a hooks-off path.
+- **`Cursor` is a bare count string today**, not the planned nonce anchor — rapid multi-send
+  attribution is unsolved (fine for Posse's one-kickoff-per-session; verify before relying
+  on it for a multi-send managed session).
