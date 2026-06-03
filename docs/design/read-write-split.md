@@ -326,3 +326,36 @@ keeps `transcript.ts` + the probes and has only adopted the easy half. **Shippin
 the whole point.**
 
 ## Phasing — TBD after questions + spike + persona review.
+
+### Acceptance findings + human-in-the-loop (real bugs the smoke test hid)
+
+A real acceptance *suite* (multi-turn, tool-use, hooks-off, interrupt) against live
+2.1.161 found what the single happy-path 6/6 masked:
+
+- **CURSOR BUG (must-fix): multi-turn `messagesSince` isolation is broken.** The cursor is
+  a transcript *count* taken at `send()`, but the transcript **lags the `done`/Stop signal**
+  (~110ms doorbell-before-package), so the next turn's cursor anchors before the prior turn's
+  reply flushes → it leaks the prior turn's tail. **This proves C1's nonce/own-record anchor
+  is necessary, not optional** (deferred as "fine single-threaded" — acceptance falsified that).
+  Fix in the focused pass: anchor `messagesSince` on the send's OWN user record (nonce), not a
+  pre-turn count; the unit test passed only because it mocked a stable file.
+- **Boot is still the fragile, pane-scraping residual** — a `hooks:false` run hit `ReplTimeout`
+  at boot (likely the flaky `❯`-vs-ghost-text idle rendering). Boot readiness remains the weak
+  spot; the observe-side redesign doesn't touch it.
+- (A third "failure" was a bad test assertion — interrupt worked; post-interrupt transcript
+  growth is correct. Fixed.)
+
+**Human-in-the-loop input (founder: "I attach tmux / use remote-control and type — answer a
+question, steer").** Three input paths into one session: `send()`, a human attaching tmux, and
+claude remote-control (phone/web). Design stance:
+- **Observe is INPUT-SOURCE-AGNOSTIC — a feature, not a problem.** A human-typed turn lands in
+  the transcript as a user record exactly like a `send()`; `messagesSince`/`progress` reflect
+  the *true* conversation regardless of author. claudemux observes the session's truth and
+  **never fights the human**. A by-hand answer to a question just continues the turn; claudemux
+  sees it. Make this explicit.
+- Sharpens: (1) the **cursor must tolerate interleaved human turns** (same root as the bug —
+  nonce anchor fixes both); (2) **`send()` vs a human's unsent composer text** collides (same as
+  interrupt-and-replace); (3) **`listClients`** (detect a human attached, per the extraction
+  spec req 12) so the consumer can *pause automation while you steer*.
+- Scope: observing human turns = in-scope (truthful state); coordinating around the human =
+  consumer policy, which claudemux **enables** (expose "human attached" + the turns) but never owns.
