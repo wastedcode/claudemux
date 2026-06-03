@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
@@ -7,6 +9,7 @@ import { bootSession } from "./boot.js";
 import { AGENT_SESSION_ID_META_KEY, DEFAULT_NAMESPACE } from "./constants.js";
 import { sharedDefaultBackend } from "./default-backend.js";
 import { makeHandle } from "./handle.js";
+import { buildHookInjection } from "./hooks.js";
 import { formatSessionLabel } from "./ref.js";
 import { validateAgentSessionId, validateNamePart } from "./validate.js";
 
@@ -52,6 +55,14 @@ export interface CreateOptions {
    * caveats before enabling it for untrusted-fork (PR-bot / CI) workloads.
    */
   trustWorkspace?: boolean;
+  /**
+   * Inject the agent's observe hooks at spawn (default **true**). Hooks give
+   * claudemux deterministic, reliable turn-lifecycle insight without scraping
+   * the TUI. Set `false` to opt out (e.g. you manage your own hooks); observe
+   * then degrades to the best-effort pane+transcript fallback. The exact
+   * injected settings are inspectable via the agent's hook spec.
+   */
+  hooks?: boolean;
 }
 
 /**
@@ -111,12 +122,26 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
   }
   const sessionId = explicitId ? (opts.agentSessionId as string) : crypto.randomUUID();
 
+  // Inject the agent's observe hooks (default on) so the session reports its
+  // turn lifecycle through a reliable hook channel, not pane-scraping. Local
+  // rendezvous file only; the Observer reads it. Prepends to extraArgs.
+  const injection = buildHookInjection({
+    agent,
+    sessionId,
+    enabled: opts.hooks !== false,
+    userExtraArgs: opts.extraArgs ?? [],
+  });
+  if (injection.rendezvousPath !== undefined) {
+    mkdirSync(dirname(injection.rendezvousPath), { recursive: true });
+  }
+  const extraArgs = [...injection.args, ...(opts.extraArgs ?? [])];
+
   const argvBuild = agent.buildArgv({
     cwd: opts.cwd,
     sessionId,
     sessionIdExplicit: explicitId,
     sessionName: formatSessionLabel(ref),
-    ...(opts.extraArgs ? { extraArgs: opts.extraArgs } : {}),
+    ...(extraArgs.length > 0 ? { extraArgs } : {}),
   });
   const agentSessionId = argvBuild.agentSessionId;
   const mergedEnv: Record<string, string> = { ...(argvBuild.env ?? {}), ...(opts.env ?? {}) };
