@@ -106,6 +106,16 @@ type TurnOutcome =
   | { readonly kind: "degraded"; readonly reason: string };   // usage-exhausted / rate-limited / error
 type AwaitKind = "permission" | "question" | (string & {});
 type AbortReason = "pane-dead" | "interrupted" | (string & {});
+// SCOPE GUARDRAIL: `awaiting` reports ONLY that one of CLAUDE'S OWN built-in
+// interactive modals is on screen — a permission prompt, or the built-in
+// `AskUserQuestion` dialog. It is an observable session state (mechanism), and
+// the consumer responds. claudemux does NOT own "ask a human / route an answer /
+// a Q&A product" — that's the consumer's domain (e.g. Posse's MCP consult/respond,
+// which claudemux sees only as generic tool_use/tool_result and must NOT interpret).
+// `awaiting:"question"` ≡ "claude's built-in AskUserQuestion modal is up", never
+// "the agent semantically asked something". Consumers who disable AskUserQuestion
+// (Posse) never see it — it's an optional detection, not a dependency. Drifting
+// past this line = doing more than session management.
 
 // === the STREAM is the primary observe seam (emit-first) ===
 type TurnEvent =
