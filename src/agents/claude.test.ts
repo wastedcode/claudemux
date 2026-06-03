@@ -399,3 +399,53 @@ describe("claude transcript reader", () => {
     }
   });
 });
+
+/**
+ * Hook marker fixtures — captured VERBATIM from claude 2.1.161 rendezvous lines
+ * (spike 2, 2026-06-03): "<epoch.ns> <hook-stdin-payload-json>".
+ */
+const MARK_SESSION_START =
+  '1780520869.545460990 {"session_id":"ea1ed621-8761-4364-99bb-9a56d8e1df4d","hook_event_name":"SessionStart","cwd":"/tmp/cmux-spike"}';
+const MARK_PROMPT_SUBMIT =
+  '1780520910.702135650 {"session_id":"ea1ed621-8761-4364-99bb-9a56d8e1df4d","hook_event_name":"UserPromptSubmit","permission_mode":"bypassPermissions"}';
+const MARK_TOOL_START =
+  '1780520963.660420728 {"session_id":"ea1ed621","hook_event_name":"PreToolUse","tool_name":"Bash"}';
+const MARK_STOP = '1780520912.288493072 {"session_id":"ea1ed621","hook_event_name":"Stop"}';
+
+describe("claude hook spec + marker parser", () => {
+  const h = claude.hooks;
+  if (!h) throw new Error("claude.hooks must be defined");
+
+  it("spec injects --settings wiring the turn events to the rendezvous path", () => {
+    const { flag, value } = h.spec({ rendezvousPath: "/tmp/cmux/turns/abc.ndjson" });
+    expect(flag).toBe("--settings");
+    const parsed = JSON.parse(value) as { hooks: Record<string, unknown> };
+    // The lifecycle events we depend on are all wired.
+    for (const ev of ["SessionStart", "UserPromptSubmit", "Stop", "PreToolUse", "PostToolUse"]) {
+      expect(parsed.hooks[ev]).toBeDefined();
+    }
+    // The command appends to exactly our rendezvous path.
+    expect(value).toContain("/tmp/cmux/turns/abc.ndjson");
+    expect(value).toContain("date +%s.%N");
+  });
+
+  it("parseMarker maps each event to a neutral edge with ms timestamp", () => {
+    expect(h.parseMarker(MARK_SESSION_START)).toMatchObject({
+      event: "session-start",
+      at: 1780520869545,
+    });
+    expect(h.parseMarker(MARK_PROMPT_SUBMIT)?.event).toBe("prompt-submit");
+    const toolEdge = h.parseMarker(MARK_TOOL_START);
+    expect(toolEdge?.event).toBe("tool-start");
+    expect(toolEdge?.tool).toBe("Bash");
+    expect(h.parseMarker(MARK_STOP)).toMatchObject({ event: "stop", sessionId: "ea1ed621" });
+  });
+
+  it("an unknown event maps to 'other'; malformed lines return null (never throw)", () => {
+    expect(h.parseMarker('1780520000.0 {"hook_event_name":"SomethingNew"}')?.event).toBe("other");
+    expect(h.parseMarker("no-space-here")).toBeNull();
+    expect(h.parseMarker("1780520000.0 {not json}")).toBeNull();
+    expect(h.parseMarker("")).toBeNull();
+    expect(h.parseMarker("notanumber {}")).toBeNull();
+  });
+});

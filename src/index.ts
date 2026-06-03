@@ -8,7 +8,7 @@
  */
 
 export { claude } from "./agents/index.js";
-export type { AgentDef, BootDialog } from "./agents/types.js";
+export type { AgentDef, BootDialog, HookEdge } from "./agents/types.js";
 
 export {
   AgentExitedDuringBoot,

@@ -129,4 +129,49 @@ export interface AgentDef {
      */
     isTurnStart(message: Message): boolean;
   };
+
+  /**
+   * Hook-based turn observation — the SOLE owner of this agent's hook
+   * vocabulary (which events to wire, the settings shape, the marker format).
+   * The agent emits turn markers to a claudemux-owned local rendezvous; the
+   * Observer reads them as deterministic phase edges (no pane-scraping). The
+   * spawn layer injects {@link spec}'s flag at launch; the Observer parses each
+   * rendezvous line with {@link parseMarker}. Both live here so the
+   * hook-event strings stay out of the agent-agnostic layers (grep-enforced).
+   *
+   * Optional for now — becomes load-bearing when injection + the Observer land.
+   */
+  readonly hooks?: {
+    /**
+     * The launch flag that wires this agent's turn hooks to append markers to
+     * `rendezvousPath`. Inspectable (transparency) and the one place that knows
+     * the settings shape. e.g. `{ flag: "--settings", value: "<json>" }`.
+     */
+    spec(o: { rendezvousPath: string }): { flag: string; value: string };
+    /** Parse one rendezvous marker line into a neutral {@link HookEdge}, or null. */
+    parseMarker(line: string): HookEdge | null;
+  };
+}
+
+/**
+ * A neutral, deterministic turn-lifecycle edge derived from an agent hook —
+ * the reliable observe signal (vs pane-scraping). `event` is backend-neutral;
+ * the Observer composes a sequence of these into phase / toolInFlight / done.
+ */
+export interface HookEdge {
+  readonly event:
+    | "session-start"
+    | "prompt-submit"
+    | "tool-start"
+    | "tool-end"
+    | "stop"
+    | "notification"
+    | "pre-compact"
+    | "other";
+  /** Epoch milliseconds the hook fired. */
+  readonly at: number;
+  /** The agent session id the hook reported, when present. */
+  readonly sessionId?: string;
+  /** Tool name for `tool-start`/`tool-end` edges, when present. */
+  readonly tool?: string;
 }

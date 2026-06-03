@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { AgentSessionIdConflict } from "../errors.js";
 import type { ClassifierRules } from "../state/types.js";
 import type { Message, MessagePart } from "../types.js";
-import type { AgentDef, BootDialog } from "./types.js";
+import type { AgentDef, BootDialog, HookEdge } from "./types.js";
 
 /**
  * The `claude` agent definition. **Sole file with claude-specific strings**;
@@ -357,10 +357,76 @@ function isTurnStart(message: Message): boolean {
   return message.role === "user" && message.parts.some((p) => p.kind === "text");
 }
 
+// ─── Hook-based turn observation (the reliable, no-pane-scrape signal) ───────
+// claude fires hooks the harness can't forget (verified in spike). We inject a
+// settings fragment wiring the turn-lifecycle events to append a marker line to
+// a claudemux-owned per-session rendezvous file; the Observer reads those as
+// deterministic phase edges. Marker line format: "<epoch.ns> <payload-json>\n",
+// where the payload (claude's hook stdin) carries hook_event_name/session_id/
+// tool_name. The settings shape + this format live ONLY here.
+
+/** claude hook event name → neutral edge. */
+const HOOK_EVENT_MAP: Record<string, HookEdge["event"]> = {
+  SessionStart: "session-start",
+  UserPromptSubmit: "prompt-submit",
+  PreToolUse: "tool-start",
+  PostToolUse: "tool-end",
+  Stop: "stop",
+  Notification: "notification",
+  PreCompact: "pre-compact",
+};
+
+function hookSpec(o: { rendezvousPath: string }): { flag: string; value: string } {
+  // Single-quote the path for the shell (claudemux-generated, uuid-based — but
+  // quote defensively). Each hook appends "<ts> <stdin-json>\n" to it.
+  const quoted = `'${o.rendezvousPath.replace(/'/g, `'\\''`)}'`;
+  const command = `{ printf '%s ' "$(date +%s.%N)"; cat; printf '\\n'; } >> ${quoted}`;
+  const entry = [{ hooks: [{ type: "command", command }] }];
+  const toolEntry = [{ matcher: "*", hooks: [{ type: "command", command }] }];
+  const settings = {
+    hooks: {
+      SessionStart: entry,
+      UserPromptSubmit: entry,
+      Stop: entry,
+      Notification: entry,
+      PreCompact: entry,
+      PreToolUse: toolEntry,
+      PostToolUse: toolEntry,
+    },
+  };
+  return { flag: "--settings", value: JSON.stringify(settings) };
+}
+
+function parseMarker(line: string): HookEdge | null {
+  const trimmed = line.trim();
+  if (trimmed === "") return null;
+  const sp = trimmed.indexOf(" ");
+  if (sp < 0) return null;
+  const at = Math.round(Number.parseFloat(trimmed.slice(0, sp)) * 1000);
+  if (!Number.isFinite(at)) return null;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(trimmed.slice(sp + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const name = typeof payload.hook_event_name === "string" ? payload.hook_event_name : "";
+  const event = HOOK_EVENT_MAP[name] ?? "other";
+  const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;
+  const tool = typeof payload.tool_name === "string" ? payload.tool_name : undefined;
+  return {
+    event,
+    at,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(tool === undefined ? {} : { tool }),
+  };
+}
+
 export const claude: AgentDef = {
   name: "claude",
   buildArgv,
   boot: { dialogs: dialog, isReady },
   rules,
   transcript: { locate: locateTranscript, parseLine: parseTranscriptLine, isTurnStart },
+  hooks: { spec: hookSpec, parseMarker },
 };
