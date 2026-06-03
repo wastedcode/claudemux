@@ -1,4 +1,5 @@
 import type { ClassifierRules } from "../state/types.js";
+import type { Message } from "../types.js";
 
 /**
  * A single boot dialog: how to recognize it and how to respond.
@@ -99,4 +100,33 @@ export interface AgentDef {
 
   /** Classifier predicates for this agent. */
   readonly rules: ClassifierRules;
+
+  /**
+   * Reading the agent's session transcript. The **sole owner** of this agent's
+   * transcript knowledge — both *where* the file lives and *how* its records
+   * parse — so every claude-version-fragile bit stays in one file
+   * (grep-enforced). The agent-agnostic Observer reads the file and feeds its
+   * lines here; it never knows the schema or the path rule.
+   *
+   * Optional for now: only the real agent implements it, and the Observer that
+   * consumes it has not landed. Becomes required once the Observer depends on it.
+   */
+  readonly transcript?: {
+    /**
+     * Absolute path of the on-disk transcript for a session id, or `null` if
+     * not found. Located by id across the agent's session store — never by
+     * recomputing the fragile cwd→path rule.
+     */
+    locate(o: { agentSessionId: string; home?: string }): string | null;
+    /**
+     * Parse one transcript line into a neutral {@link Message}, or `null` for a
+     * metadata record, a blank line, or a partial/half-flushed line.
+     */
+    parseLine(line: string): Message | null;
+    /**
+     * True when `message` starts a new user turn (a typed prompt), false for
+     * tool-result feedback that is also recorded turn-side.
+     */
+    isTurnStart(message: Message): boolean;
+  };
 }

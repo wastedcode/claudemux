@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentSessionIdConflict } from "../errors.js";
 import { claude } from "./claude.js";
@@ -309,5 +312,90 @@ describe("claude.rules — classifier on real 2.1.153 frames", () => {
   it("idle is the empty-box check (same as boot.isReady)", () => {
     expect(claude.rules.idle(READY_PANE_2_1_153)).toBe(true);
     expect(claude.rules.idle(WORKING_PANE_2_1_153)).toBe(false);
+  });
+});
+
+/**
+ * Transcript reader fixtures — record shapes captured VERBATIM from
+ * authenticated claude 2.1.161 (spike, 2026-06-03). They pin the real schema so
+ * a future claude minor that drifts the record shape fails `npm test` instead
+ * of silently returning wrong messages to a consumer.
+ */
+const USER_TYPED =
+  '{"parentUuid":"p1","type":"user","message":{"role":"user","content":"Use the Bash tool to run exactly: echo hello-from-spike"},"uuid":"u1","timestamp":"2026-06-03T21:42:39.052Z","promptSource":"typed"}';
+const ASSISTANT_TEXT =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I\'ll run that command."}],"stop_reason":"tool_use"},"uuid":"a1","timestamp":"2026-06-03T21:42:41.000Z"}';
+const ASSISTANT_TOOLUSE =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hello-from-spike"}}]},"uuid":"a2"}';
+const ASSISTANT_MCP_TOOLUSE =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"mcp__claude_ai_Notion__notion-search","input":{"query":"roadmap"}}]},"uuid":"a3"}';
+const TOOL_RESULT_USER =
+  '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"hello-from-spike\\n","is_error":false}]},"uuid":"u2"}';
+const METADATA_RECORD =
+  '{"type":"file-history-snapshot","uuid":"m1","timestamp":"2026-06-03T00:00:00Z"}';
+const PARTIAL_LINE = '{"type":"assist';
+
+describe("claude transcript reader", () => {
+  const tx = claude.transcript;
+  if (!tx) throw new Error("claude.transcript must be defined");
+
+  it("parses a typed user prompt → role user, one text part, id+at, isTurnStart", () => {
+    const m = tx.parseLine(USER_TYPED);
+    expect(m).not.toBeNull();
+    expect(m?.role).toBe("user");
+    expect(m?.id).toBe("u1");
+    expect(m?.at).toBe("2026-06-03T21:42:39.052Z");
+    expect(m?.parts).toEqual([
+      { kind: "text", text: "Use the Bash tool to run exactly: echo hello-from-spike" },
+    ]);
+    expect(m && tx.isTurnStart(m)).toBe(true);
+  });
+
+  it("parses an assistant text block → role assistant, not a turn start", () => {
+    const m = tx.parseLine(ASSISTANT_TEXT);
+    expect(m?.role).toBe("assistant");
+    expect(m?.parts).toEqual([{ kind: "text", text: "I'll run that command." }]);
+    expect(m && tx.isTurnStart(m)).toBe(false);
+  });
+
+  it("parses a tool_use block → kind tool, name + input summary", () => {
+    const m = tx.parseLine(ASSISTANT_TOOLUSE);
+    expect(m?.parts).toEqual([{ kind: "tool", tool: "Bash", summary: "echo hello-from-spike" }]);
+  });
+
+  it("strips the mcp__server__ prefix from MCP tool names", () => {
+    const m = tx.parseLine(ASSISTANT_MCP_TOOLUSE);
+    expect(m?.parts).toEqual([{ kind: "tool", tool: "notion-search", summary: "roadmap" }]);
+  });
+
+  it("parses a tool_result-feedback user record → tool-result part, NOT a turn start", () => {
+    const m = tx.parseLine(TOOL_RESULT_USER);
+    expect(m?.role).toBe("user");
+    expect(m?.parts[0]?.kind).toBe("tool-result");
+    expect((m?.parts[0] as { ok: boolean }).ok).toBe(true);
+    expect(m && tx.isTurnStart(m)).toBe(false);
+  });
+
+  it("returns null for metadata, partial, and blank lines (never throws)", () => {
+    expect(tx.parseLine(METADATA_RECORD)).toBeNull();
+    expect(tx.parseLine(PARTIAL_LINE)).toBeNull();
+    expect(tx.parseLine("")).toBeNull();
+    expect(tx.parseLine("   ")).toBeNull();
+  });
+
+  it("locate finds <id>.jsonl by id-glob across project dirs, null when absent", () => {
+    const home = mkdtempSync(join(tmpdir(), "cmux-tx-"));
+    try {
+      const projDir = join(home, ".claude", "projects", "-some-cwd-slug");
+      mkdirSync(projDir, { recursive: true });
+      const id = "f3aaa87f-d2e3-4fea-89bf-80cda78d5f22";
+      const file = join(projDir, `${id}.jsonl`);
+      writeFileSync(file, USER_TYPED);
+      expect(tx.locate({ agentSessionId: id, home })).toBe(file);
+      expect(tx.locate({ agentSessionId: "no-such-id", home })).toBeNull();
+      expect(tx.locate({ agentSessionId: id, home: "/nonexistent/home" })).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

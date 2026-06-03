@@ -36,6 +36,8 @@ export type {
   BackendCommandEvent,
   ClientInfo,
   IdleState,
+  Message,
+  MessagePart,
   ReadyOpts,
   SessionHandle,
   State,

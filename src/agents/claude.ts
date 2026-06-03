@@ -1,5 +1,9 @@
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { AgentSessionIdConflict } from "../errors.js";
 import type { ClassifierRules } from "../state/types.js";
+import type { Message, MessagePart } from "../types.js";
 import type { AgentDef, BootDialog } from "./types.js";
 
 /**
@@ -236,9 +240,127 @@ function buildArgv(o: {
 }
 
 /** The `claude` agent definition. */
+// ─── Transcript reading (claude's on-disk session log) ──────────────────────
+// claude writes the session transcript to
+// `<home>/.claude/projects/<cwd-slug>/<session-id>.jsonl`, append-only (verified
+// + docs-confirmed: compaction summarizes the context window, never rewrites the
+// file). The cwd→slug rule is fragile (punctuation-substituted), so we locate by
+// id-glob across project dirs rather than recompute it.
+
+/** Locate the transcript for a session id by scanning the project dirs. */
+function locateTranscript(o: { agentSessionId: string; home?: string }): string | null {
+  const projectsDir = join(o.home ?? homedir(), ".claude", "projects");
+  let entries: string[];
+  try {
+    entries = readdirSync(projectsDir);
+  } catch {
+    return null;
+  }
+  for (const dir of entries) {
+    const candidate = join(projectsDir, dir, `${o.agentSessionId}.jsonl`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** `mcp__<server>__<tool>` → `<tool>`; other names pass through. */
+function stripMcpPrefix(name: string): string {
+  if (!name.startsWith("mcp__")) return name;
+  const segs = name.split("__");
+  return segs[segs.length - 1] ?? name;
+}
+
+/** A short, neutral one-line summary of a tool_use input. */
+function summarizeToolInput(input: unknown): string {
+  if (input === null || typeof input !== "object") return "";
+  const o = input as Record<string, unknown>;
+  for (const key of ["command", "file_path", "path", "pattern", "url", "query"]) {
+    const v = o[key];
+    if (typeof v === "string") return v;
+  }
+  return "";
+}
+
+/** A short, neutral summary of a tool_result's content (string or text blocks). */
+function summarizeToolResult(content: unknown): string {
+  if (typeof content === "string") return content.slice(0, 200);
+  if (Array.isArray(content)) {
+    const text = content
+      .map((c) =>
+        c !== null && typeof c === "object" && typeof (c as { text?: unknown }).text === "string"
+          ? (c as { text: string }).text
+          : "",
+      )
+      .join("");
+    return text.slice(0, 200);
+  }
+  return "";
+}
+
+/**
+ * Parse one transcript line into a neutral {@link Message}. Returns `null` for
+ * a blank line, a partial/half-flushed line (unparseable JSON), or a metadata
+ * record (anything that is not a `user`/`assistant` turn-side).
+ */
+function parseTranscriptLine(line: string): Message | null {
+  const trimmed = line.trim();
+  if (trimmed === "") return null;
+  let rec: Record<string, unknown>;
+  try {
+    rec = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const type = rec.type;
+  if (type !== "user" && type !== "assistant") return null;
+  const msg = rec.message as { content?: unknown } | undefined;
+  if (msg === undefined) return null;
+
+  const parts: MessagePart[] = [];
+  const content = msg.content;
+  if (typeof content === "string") {
+    if (content !== "") parts.push({ kind: "text", text: content });
+  } else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block === null || typeof block !== "object") continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === "text" && typeof b.text === "string") {
+        parts.push({ kind: "text", text: b.text });
+      } else if (b.type === "tool_use" && typeof b.name === "string") {
+        parts.push({
+          kind: "tool",
+          tool: stripMcpPrefix(b.name),
+          summary: summarizeToolInput(b.input),
+        });
+      } else if (b.type === "tool_result") {
+        parts.push({
+          kind: "tool-result",
+          ok: b.is_error !== true,
+          summary: summarizeToolResult(b.content),
+        });
+      }
+      // `thinking` blocks are intentionally skipped — internal, not conversation.
+    }
+  }
+  if (parts.length === 0) return null;
+
+  const id = typeof rec.uuid === "string" ? rec.uuid : "";
+  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined;
+  return { id, role: type, parts, ...(at === undefined ? {} : { at }) };
+}
+
+/**
+ * A typed user prompt carries a text part; a tool-result-feedback user record
+ * carries only tool-result parts (not a new turn).
+ */
+function isTurnStart(message: Message): boolean {
+  return message.role === "user" && message.parts.some((p) => p.kind === "text");
+}
+
 export const claude: AgentDef = {
   name: "claude",
   buildArgv,
   boot: { dialogs: dialog, isReady },
   rules,
+  transcript: { locate: locateTranscript, parseLine: parseTranscriptLine, isTurnStart },
 };

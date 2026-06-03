@@ -26,6 +26,25 @@ export type State = "working" | "idle" | "permission-prompt" | "dialog" | "unkno
 export type IdleState = Extract<State, "idle" | "permission-prompt" | "dialog">;
 
 /**
+ * A single conversation message, **backend-neutral** — never the agent's raw
+ * on-disk record shape. `parts` is the ordered content of one turn-side.
+ */
+export interface Message {
+  /** Stable per-message id (addressable for streaming dedup / update-in-place). */
+  readonly id: string;
+  readonly role: "user" | "assistant";
+  readonly parts: readonly MessagePart[];
+  /** ISO timestamp, when the agent records one. */
+  readonly at?: string;
+}
+
+/** One piece of a {@link Message} — neutral, never a raw tool-call payload. */
+export type MessagePart =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "tool"; readonly tool: string; readonly summary: string }
+  | { readonly kind: "tool-result"; readonly ok: boolean; readonly summary: string };
+
+/**
  * Options governing {@link SessionHandle.wait}. v0.0.1 ships **state-mode
  * only**; `pattern` and `debounce` modes are deferred to v0.1.
  *
