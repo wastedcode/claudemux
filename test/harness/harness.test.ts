@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, utimesSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -77,21 +77,21 @@ describe("Harness — five guards smoke test", () => {
 describe("Harness — sentinel guard catches the leak it exists for", () => {
   it("a contrived sandbox-bypass that mutates the real sentinel is detected", async () => {
     const sentinelPath = join(homedir(), ".claude", ".do-not-touch-sentinel");
-    const originalMtimeMs = statSync(sentinelPath).mtimeMs;
+    const original = statSync(sentinelPath);
     const offending = Harness.create();
     try {
       // Bypass the sandbox on purpose: touch the real sentinel.
-      const { utimesSync } = await import("node:fs");
-      const futureSec = Math.floor(originalMtimeMs / 1000) + 5;
+      const futureSec = Math.floor(original.mtimeMs / 1000) + 5;
       utimesSync(sentinelPath, futureSec, futureSec);
       const leak = await offending.teardown();
       expect(leak).toMatch(/sentinel mtime moved/);
     } finally {
-      // Restore so the outer afterEach (which checks the file-scope harness)
-      // doesn't report a false leak.
-      const { utimesSync } = await import("node:fs");
-      const sec = Math.floor(originalMtimeMs / 1000);
-      utimesSync(sentinelPath, sec, sec);
+      // Restore the EXACT original times so the file-scope afterEach sees an
+      // unchanged sentinel. Pass seconds-as-float (mtimeMs / 1000) — NOT
+      // Math.floor — so sub-second precision survives. Flooring discarded up
+      // to ~1s, which read as a leak on filesystems that record sub-second
+      // mtimes (CI) though not on whole-second ones (some dev boxes).
+      utimesSync(sentinelPath, original.atimeMs / 1000, original.mtimeMs / 1000);
     }
   });
 });

@@ -14,8 +14,9 @@ import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./
  * `-e` flag is added only when the caller passes `ansi: true`; the default
  * is plain text (which is what the classifier matches against anyway).
  *
- * If the capture output contains the `Pane is dead (signal N, …)` annotation
- * (Case A, when `remain-on-exit` is `on`), `PaneDead` is thrown.
+ * If the capture output contains the `Pane is dead (…)` annotation (Case A,
+ * when `remain-on-exit` is `on`), `PaneDead` is thrown — regardless of how the
+ * cause renders (`signal 9` / `signal kill` / `status N`).
  */
 export async function capturePane(
   exec: TmuxExec,
@@ -33,9 +34,9 @@ export async function capturePane(
 
   // Surface Case A pane-death loudly — Case B (session gone) is already
   // surfaced by classifyTmuxFailure above. The annotation lands in stdout.
-  const signal = detectPaneDeadAnnotation(r.stdout);
-  if (signal !== null) {
-    throw new PaneDead(label, signal);
+  const dead = detectPaneDeadAnnotation(r.stdout);
+  if (dead !== null) {
+    throw new PaneDead(label, dead.signal);
   }
 
   if (opts.lines !== undefined && opts.lines > 0) {

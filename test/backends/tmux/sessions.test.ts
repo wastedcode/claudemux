@@ -73,10 +73,28 @@ describe("TmuxExec — discipline + spawn-time errors", () => {
     expect(r.stderr.toLowerCase()).toContain("can't find session");
   });
 
-  it("detectPaneDeadAnnotation extracts the signal from a capture-pane output", () => {
-    const stdoutA = "blah\nblah\nPane is dead (signal 9, Tue Mar 5 10:00:00 2026)\n";
-    expect(detectPaneDeadAnnotation(stdoutA)).toBe(9);
+  it("detectPaneDeadAnnotation detects death across platform signal renderings", () => {
+    // The cause inside the parens varies by platform / tmux version. Detection
+    // must fire on every form (no false negatives) and normalize the signal to
+    // a canonical, backend-neutral name. These are real annotation strings:
+    //   Linux  → numeric signal       macOS → signal NAME       normal exit → status
+    const linux = "blah\nblah\nPane is dead (signal 9, Tue Mar 5 10:00:00 2026)\n";
+    const macos = "blah\nPane is dead (signal kill, Wed Jun 3 00:33:31 2026)\n";
+    const term = "Pane is dead (signal TERM, Tue Mar 5 10:00:00 2026)\n";
+    const exited = "Pane is dead (status 0, Tue Mar 5 10:00:00 2026)\n";
+
+    expect(detectPaneDeadAnnotation(linux)?.signal).toBe("SIGKILL");
+    expect(detectPaneDeadAnnotation(macos)?.signal).toBe("SIGKILL");
+    expect(detectPaneDeadAnnotation(term)?.signal).toBe("SIGTERM");
+
+    // Normal exit: the pane IS dead — must be detected — but carries no signal.
+    expect(detectPaneDeadAnnotation(exited)).not.toBeNull();
+    expect(detectPaneDeadAnnotation(exited)?.signal).toBeUndefined();
+
+    // Not the annotation → null. And a mid-line mention must NOT false-positive
+    // (the annotation is anchored at line start, as tmux renders it).
     expect(detectPaneDeadAnnotation("nothing of the sort")).toBeNull();
+    expect(detectPaneDeadAnnotation("a joke: the Pane is dead (lol) ha")).toBeNull();
   });
 });
 

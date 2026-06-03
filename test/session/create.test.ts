@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmuxBackend } from "../../src/backends/tmux/index.js";
 import { LoginRequired, SessionExists } from "../../src/errors.js";
 import { create } from "../../src/session/create.js";
-import { Harness } from "../harness/index.js";
+import { Harness, claudeBinDir } from "../harness/index.js";
 
 let h: Harness;
 
@@ -47,7 +47,7 @@ describe("create() — pre-auth boot path against real claude (LoginRequired cle
     const backend = tmuxBackend({ socket: h.socket });
     const env = {
       ...h.env,
-      PATH: `/home/claude/.local/bin:${h.env.PATH}`,
+      PATH: `${claudeBinDir()}:${h.env.PATH}`,
     };
 
     await expect(

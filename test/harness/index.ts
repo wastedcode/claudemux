@@ -1,4 +1,6 @@
 import { type SpawnOptions, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { type SandboxHome, disposeSandboxHome, mintSandboxHome } from "./sandbox.js";
 import { type Sentinel, plantSentinel, verifySentinel } from "./sentinel.js";
 import { mintSocket, tmuxArgs } from "./socket.js";
@@ -18,6 +20,46 @@ import { mintSocket, tmuxArgs } from "./socket.js";
  *     PGID. Name-based matching (`pkill claude`, etc.) is banned tree-wide.
  */
 
+/** Directory of `cmd` as found on the *ambient* PATH, or null if not found. */
+function binDirOnPath(cmd: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync(join(dir, cmd))) return dir;
+  }
+  return null;
+}
+
+// The curated PATH must include the dirs of the tools the curated-env children
+// actually exec, since it does NOT inherit the rest of `process.env`:
+//   - the running node, so the CLI bin's `#!/usr/bin/env node` shebang resolves
+//     wherever node lives (e.g. the Actions hosted toolcache, not /usr/bin);
+//   - the tmux the matrix built from source (added to $GITHUB_PATH, ambient
+//     only). Hardcoding /usr/bin masks this on Linux — which ships a preinstalled
+//     tmux — but breaks macOS, where the only tmux is the from-source one outside
+//     /usr/bin, so a CLI subprocess can't find it and exits non-zero. Resolving
+//     it also makes Linux exercise the matrix version, not the preinstalled one.
+const NODE_BIN_DIR = dirname(process.execPath);
+const TMUX_BIN_DIR = binDirOnPath("tmux");
+const CURATED_PATH = [NODE_BIN_DIR, TMUX_BIN_DIR, "/usr/local/bin", "/usr/bin", "/bin"]
+  .filter((d): d is string => d !== null)
+  .filter((d, i, a) => a.indexOf(d) === i)
+  .join(":");
+
+/**
+ * Directory holding the real `claude` binary, resolved from the *ambient* PATH
+ * — the one sanctioned exception to the curated-env rule. The pre-auth boot
+ * tests need claude's actual location injected onto the otherwise-hermetic
+ * PATH so they can reach an installed-but-unauthenticated claude (per ADR 0005:
+ * CI installs claude, never logs in; the pre-auth LoginRequired path is what CI
+ * exercises). Resolve it — never hardcode a home: on a dev box claude is on PATH
+ * at $HOME/.local/bin; in CI the install step adds the same to $GITHUB_PATH, but
+ * the literal home differs (/home/runner, /Users/runner). Hardcoding one box's
+ * path is the exact PATH-mismatch ADR 0005 flagged.
+ */
+export function claudeBinDir(): string {
+  // Canonical install location (claude.ai/install.sh → $HOME/.local/bin).
+  return binDirOnPath("claude") ?? join(process.env.HOME ?? "", ".local", "bin");
+}
+
 /** One curated env, built fresh per harness — never derived from `process.env`. */
 function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> {
   return {
@@ -29,7 +71,7 @@ function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> 
     TMUX_SOCKET: socket,
     LC_ALL: "C.UTF-8",
     TERM: "xterm-256color",
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PATH: CURATED_PATH,
   };
 }
 

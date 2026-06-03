@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Harness } from "../harness/index.js";
+import { Harness, claudeBinDir } from "../harness/index.js";
 
 /**
  * CLI integration test. Spawns `bin/claudemux` as a subprocess so we
@@ -158,7 +158,7 @@ describe("CLI — unknown agent surfaces a typed error", () => {
 
 describe("CLI — spawn against real claude in sandbox surfaces LoginRequired cleanly", () => {
   it("spawn <name> --cwd in a fresh sandbox HOME exits non-zero with LoginRequired", async () => {
-    const path = `/home/claude/.local/bin:${h.env.PATH}`;
+    const path = `${claudeBinDir()}:${h.env.PATH}`;
     const r = await runCli(
       ["spawn", "preauth", "--cwd", h.sandbox.home, "--boot-timeout-ms", "45000"],
       { PATH: path },

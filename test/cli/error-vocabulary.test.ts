@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mintSocket } from "../../src/backends/tmux/socket.js";
-import { Harness } from "../harness/index.js";
+import { Harness, claudeBinDir } from "../harness/index.js";
 
 /**
  * QA P1-2 regression test — the substrate's success-criteria #3 says
@@ -103,7 +103,7 @@ describe("CLI error messages — concurrent spawn race (QA P1-R2)", () => {
     // then hit LoginRequired at boot (claude isn't authenticated). Both are
     // clean typed errors. The invariant under test: NEITHER stderr contains
     // 'tmux', and at least one carries "session already exists".
-    const path = `/home/claude/.local/bin:${h.env.PATH}`;
+    const path = `${claudeBinDir()}:${h.env.PATH}`;
     const run = () =>
       new Promise<CliResult>((resolve, reject) => {
         const env = { ...h.env, CLAUDEMUX_SOCKET: testSocket, PATH: path };

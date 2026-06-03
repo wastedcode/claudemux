@@ -21,7 +21,7 @@ describe("typed errors", () => {
       { err: new DialogStuck("y", "theme-picker"), name: "y" },
       { err: new ReplTimeout("z", 12345), name: "z" },
       { err: new LoginRequired("a"), name: "a" },
-      { err: new PaneDead("b", 9), name: "b" },
+      { err: new PaneDead("b", "SIGKILL"), name: "b" },
       { err: new SessionGone("c"), name: "c" },
       { err: new BackendUnreachable("d", "no-server"), name: "d" },
       {
@@ -55,10 +55,16 @@ describe("typed errors", () => {
     expect(e.message).toContain("5000ms");
   });
 
-  it("PaneDead preserves the signal", () => {
-    const e = new PaneDead("s", 9);
-    expect(e.signal).toBe(9);
-    expect(e.message).toContain("signal 9");
+  it("PaneDead preserves the canonical signal name", () => {
+    const e = new PaneDead("s", "SIGKILL");
+    expect(e.signal).toBe("SIGKILL");
+    expect(e.message).toContain("SIGKILL");
+  });
+
+  it("PaneDead without an identified signal still reports death", () => {
+    const e = new PaneDead("s");
+    expect(e.signal).toBeUndefined();
+    expect(e.message).toContain("pane process is dead");
   });
 
   it("BackendUnreachable carries kind + optionally wraps an underlying cause", () => {
