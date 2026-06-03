@@ -51,6 +51,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   taxonomy, the persist-both / single-writer / trust-dialog contracts, and
   `examples/adopt-after-restart.ts` for the runnable recovery loop.
 
+### Changed
+
+- **`PaneDead.signal` is now the canonical signal name** (e.g. `"SIGKILL"`),
+  typed `string | undefined`, replacing the previous `number`. Signal numbers
+  are not stable across operating systems; names are, and stay backend-neutral.
+  Breaking vs v0.0.1, taken now pre-adoption. See ADR 0007.
+
+### Fixed
+
+- **`PaneDead` now fires on macOS.** tmux renders the dead-pane cause as a signal
+  *name* there (`Pane is dead (signal kill, …)`) but a *number* on Linux; the
+  detector required a number, so a dead pane read as alive on macOS. Detection
+  now anchors on the `Pane is dead (` annotation prefix, independent of how the
+  cause renders (`signal 9` / `signal kill` / `status N`) — no false negatives.
+  Pinned with pure unit fixtures for every rendering. See ADR 0007.
+
 ## [0.0.1] - 2026-05-28
 
 ### Added

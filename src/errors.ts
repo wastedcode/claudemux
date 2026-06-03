@@ -164,11 +164,17 @@ export class WorkspaceUntrusted extends ClaudemuxError {
  * is still present in the backend's data model (Case A pane-death).
  */
 export class PaneDead extends ClaudemuxError {
-  /** Signal number reported by the backend, if available. */
-  readonly signal: number;
+  /**
+   * Canonical name of the signal that killed the pane process (e.g.
+   * `"SIGKILL"`) — backend-neutral and platform-stable (signal *numbers*
+   * differ across OSes; names do not). Undefined when the pane died from a
+   * normal exit or the cause could not be identified: the error still fires,
+   * the signal is best-effort diagnostic metadata.
+   */
+  readonly signal: string | undefined;
 
-  constructor(sessionName: string, signal: number) {
-    super(`pane process is dead (signal ${signal})`, sessionName);
+  constructor(sessionName: string, signal?: string) {
+    super(signal ? `pane process is dead (${signal})` : "pane process is dead", sessionName);
     this.signal = signal;
   }
 }
