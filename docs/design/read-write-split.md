@@ -247,6 +247,30 @@ the thinking-vs-hung signal behavior. Findings appended below as data lands.
   Observed firing: all but SessionEnd (fires on end). A stray `SubagentStop` recurs after `Stop`
   on non-subagent turns — anomaly, don't rely on it.
 
+### Spike 3 + Anthropic docs (MCP / skills / slash / compaction — verified)
+
+- **Auto-compaction: founder's hypothesis CONFIRMED by docs.** Per
+  [context-window.md](https://code.claude.com/docs/en/context-window.md) +
+  [sessions.md](https://code.claude.com/docs/en/sessions.md): compaction (manual `/compact` AND
+  auto-at-limit) replaces the in-memory **context window** with a summary; the on-disk `.jsonl`
+  is **append-only ALWAYS**, **never rewritten/truncated**, **session-id never changes**. → the
+  **C1 cursor-invalidation risk is CLOSED**: a byte-offset/count cursor is durable across
+  compaction. The nonce anchor still matters for *rapid-send attribution*, but not for compaction.
+  (Survives compaction, per docs: system prompt, CLAUDE.md, auto-memory, invoked skill bodies
+  capped ~5K tokens each.)
+- **MCP works in driven sessions** (empirical: `/mcp` showed 5 servers, `Notion ✔ connected ·
+  16 tools`). Docs: MCP behaves identically interactive vs headless; configured via
+  `--mcp-config` / `.mcp.json` / `~/.claude.json` / settings; MCP tool calls fire
+  `Pre`/`PostToolUse` like any tool. → claudemux must **pass `--mcp-config` through** (it
+  already passes extraArgs) and the parser must handle `mcp__<server>__<tool>` tool_use records.
+- **Slash commands + skills work in driven sessions** (empirical: `/compact`, `/mcp` ran; the
+  `/` palette listed skills as commands — `/claude-api`, `/advisor`, `/autofix-pr`, …). Skills are
+  user-invoked (`/skill-name`) or model-invoked; both work via send-keys.
+- **Transcript schema is UNDOCUMENTED/UNVERSIONED** (docs: "each line is a JSON object for a
+  message, tool use, or metadata entry" — that's all). Records carry a `version` field (e.g.
+  `"2.1.150"`). → parser must be **reverse-engineered + fixtured + keyed on `version`**; this is a
+  named maintenance risk (a claude release can change the shape with no documented policy).
+
 ## Converged design decisions (spike + two persona reviews)
 
 The OSS-architect and Posse-builder reviews independently converged. Decisions now firm:

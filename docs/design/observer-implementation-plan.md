@@ -229,13 +229,13 @@ the findings, and one new architectural decision emerged.
 
 **Critical (fix before building):**
 - **C1. Cursor must be nonce-anchored, not count/offset** — for *rapid-send attribution* (two
-  sends bracket the same output). **Compaction half DOWNGRADED by spike 2:** manual `/compact`
-  is **append-only** (file grew, no rewrite/fork) so a count cursor is *not* invalidated, *and*
-  **`PreCompact` fires** as an explicit signal. FIX: `send()` injects a per-turn **nonce** +
-  identifies its own user-record; `Cursor = {transcriptPath, anchorNonce}`; subscribe to
-  `PreCompact`; keep `CursorInvalidated` as **insurance** (ship the typed error) in case
-  auto-compaction at context-limit rewrites — which is **UNTESTED, the one open compaction risk.**
-  Resolves §7-Q1.
+  sends bracket the same output) ONLY. **Compaction half CLOSED:** spike 2 showed `/compact` is
+  append-only, and Anthropic docs (context-window.md / sessions.md) confirm the `.jsonl` is
+  **append-only ALWAYS** (manual AND auto-compaction), never rewritten, session-id stable. So a
+  byte-offset/count cursor is durable across compaction — no `CursorInvalidated`-on-compaction
+  needed. FIX: `send()` injects a per-turn **nonce** + identifies its own user-record;
+  `Cursor = {transcriptPath, anchorNonce}`. `PreCompact` is available as a signal but not
+  required for cursor safety. Resolves §7-Q1.
 - **C2. "Never hangs" vs "`wait()` no-opts waits forever" are contradictory.** FIX: **`maxMs`
   is mandatory** (resolves §7-Q3). Zero-arg `wait()` is removed; a true hang resolves
   `budget-exceeded` at the consumer's ceiling.
@@ -332,7 +332,10 @@ never on scraping the TUI. Concretely:
    + pane dialog. *Disabled* (Posse default): asks in chat → undetectable (C8 — consumer reads content).
 4. **Externally-induced interrupt** — no hook, no our-flag → pane-phrase fallback only. Marked unreliable.
 
-**Follow-up spike: DONE** (see read-write-split.md §"Spike 2 findings"). Net: hooks reliably cover
+**Follow-up spikes: DONE** (read-write-split.md §"Spike 2/3 findings"). Net: hooks reliably cover
 lifecycle/done/content; the pane is required only for boot dialogs + (prompting-mode) permission
-prompts + external interrupt — a small, named set, mostly moot under bypass. **One open item
-remains: auto-compaction at context-limit** (manual `/compact` proved append-only; auto untested).
+prompts + external interrupt — a small, named set, mostly moot under bypass. **No open empirical
+risks remain:** auto-compaction is docs-confirmed append-only (cursor safe); MCP, slash commands,
+and skills all work in driven sessions (pass `--mcp-config` through; parser handles `mcp__*`
+tool_use + skill records). The remaining risk is **maintenance, not unknown**: the transcript
+schema is undocumented/unversioned → fixture it and key on the per-record `version` field.
