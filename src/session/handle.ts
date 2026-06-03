@@ -4,9 +4,11 @@ import { interruptOnce } from "../io/interrupt.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForState } from "../io/wait.js";
+import { observeProgress, readMessages } from "../observe/observer.js";
 import { classify } from "../state/classifier.js";
-import type { BackendCommandEvent, ReadyOpts, SessionHandle, State } from "../types.js";
+import type { BackendCommandEvent, Message, ReadyOpts, SessionHandle, State } from "../types.js";
 import { CLASSIFIER_BOTTOM_N } from "./constants.js";
+import { rendezvousPathFor } from "./hooks.js";
 import { Mutex } from "./mutex.js";
 
 interface HandleDeps {
@@ -21,6 +23,12 @@ interface HandleDeps {
    * `--resume`); never fabricated.
    */
   agentSessionId?: string;
+  /**
+   * The hook rendezvous file injected at spawn (for the observe channel). When
+   * absent (e.g. {@link attachHandle}/adopt), the handle re-derives it from
+   * {@link agentSessionId} — correct for the common (non-resume) case.
+   */
+  rendezvousPath?: string;
 }
 
 /**
@@ -36,7 +44,30 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     name: deps.name,
     namespace: deps.namespace,
     ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
-    send: (text) => mutex.run(() => sendOnce(deps.backend, deps.agent, ref, text)),
+    send: (text) =>
+      mutex.run(async () => {
+        // Anchor the cursor BEFORE delivery so messagesSince() returns this
+        // turn's output (a count into the append-only transcript).
+        const cursor = String(transcriptMessages(deps).length);
+        await sendOnce(deps.backend, deps.agent, ref, text);
+        return cursor;
+      }),
+    messagesSince: (cursor) =>
+      mutex.run(async () => {
+        const all = transcriptMessages(deps);
+        const n = Number.parseInt(cursor, 10);
+        return Number.isFinite(n) && n >= 0 ? all.slice(n) : all;
+      }),
+    progress: () =>
+      mutex.run(async () => {
+        const rv = rendezvousPath(deps);
+        const tp = transcriptPath(deps);
+        return observeProgress({
+          agent: deps.agent,
+          ...(rv === undefined ? {} : { rendezvousPath: rv }),
+          ...(tp === undefined ? {} : { transcriptPath: tp }),
+        });
+      }),
     interrupt: () => mutex.run(() => interruptOnce(deps.backend, ref)),
     wait: (opts?: ReadyOpts) =>
       mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
@@ -45,7 +76,25 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     kill: () => mutex.run(() => deps.backend.kill(ref)),
     onBackendCommand: (handler: (event: BackendCommandEvent) => void) =>
       deps.backend.onCommand(handler),
-  };
+  } satisfies SessionHandle;
+}
+
+/** The hook rendezvous file: the one injected at spawn, else re-derived from the id. */
+function rendezvousPath(deps: HandleDeps): string | undefined {
+  if (deps.rendezvousPath !== undefined) return deps.rendezvousPath;
+  return deps.agentSessionId === undefined ? undefined : rendezvousPathFor(deps.agentSessionId);
+}
+
+/** The agent's transcript file for this session, when locatable. */
+function transcriptPath(deps: HandleDeps): string | undefined {
+  if (deps.agent.transcript === undefined || deps.agentSessionId === undefined) return undefined;
+  return deps.agent.transcript.locate({ agentSessionId: deps.agentSessionId }) ?? undefined;
+}
+
+/** All messages in the session transcript, or `[]` when it can't be located. */
+function transcriptMessages(deps: HandleDeps): Message[] {
+  const path = transcriptPath(deps);
+  return path === undefined ? [] : readMessages({ agent: deps.agent, transcriptPath: path });
 }
 
 async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Promise<State> {

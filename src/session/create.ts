@@ -185,5 +185,6 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
     namespace,
     name: opts.name,
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    ...(injection.rendezvousPath === undefined ? {} : { rendezvousPath: injection.rendezvousPath }),
   });
 }

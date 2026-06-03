@@ -9,7 +9,10 @@ import { type CommonOpts, handleFor } from "./context.js";
 export async function sendCli(name: string, text: string, opts: CommonOpts = {}): Promise<void> {
   const body = text === "-" ? await readStdin() : text;
   const handle = handleFor({ ...opts, name });
-  await handle.send(body);
+  const cursor = await handle.send(body);
+  // Emit the cursor so `claudemux messages <name> --since <cursor>` can read
+  // this turn's output (CLI mirrors the library's send → cursor contract).
+  process.stdout.write(`${JSON.stringify({ cursor })}\n`);
 }
 
 function readStdin(): Promise<string> {

@@ -38,6 +38,15 @@ export interface Message {
   readonly at?: string;
 }
 
+/**
+ * An opaque, serializable anchor into a session's message stream, returned by
+ * {@link SessionHandle.send}. Pass it to {@link SessionHandle.messagesSince} to
+ * read everything produced since that send. Durable across a process restart
+ * (the transcript is append-only — manual and auto compaction summarize the
+ * context window, never rewrite the on-disk log).
+ */
+export type Cursor = string;
+
 /** One piece of a {@link Message} — neutral, never a raw tool-call payload. */
 export type MessagePart =
   | { readonly kind: "text"; readonly text: string }
@@ -136,9 +145,26 @@ export interface SessionHandle {
    * Deliver `text` as one logical user turn. Multi-line input is paste-safe
    * by construction (the substrate has no `sendRawText` primitive).
    *
-   * Blocks on **write delivery**, NOT on the agent's response.
+   * Blocks on **write delivery**, NOT on the agent's response. Returns a
+   * {@link Cursor} anchored at this send — pass it to {@link messagesSince} to
+   * read what the turn produces.
    */
-  send(text: string): Promise<void>;
+  send(text: string): Promise<Cursor>;
+
+  /**
+   * The messages produced since `cursor` (a value a prior {@link send}
+   * returned), as neutral {@link Message}s read from the session transcript.
+   * Empty when the transcript can't be located (e.g. an adopted session with no
+   * recoverable {@link agentSessionId}).
+   */
+  messagesSince(cursor: Cursor): Promise<Message[]>;
+
+  /**
+   * A point-in-time {@link Progress} snapshot — turn phase and progress signals
+   * fused from the reliable hook + transcript channels (not pane-scraping).
+   * Policy-free: the consumer turns staleness into its own patience.
+   */
+  progress(): Promise<Progress>;
 
   /**
    * Fire `Escape` at the pane — claude's own interrupt key — to stop a
