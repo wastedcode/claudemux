@@ -274,6 +274,7 @@ function stripMcpPrefix(name: string): string {
 function summarizeToolInput(input: unknown): string {
   if (input === null || typeof input !== "object") return "";
   const o = input as Record<string, unknown>;
+  // First matching field becomes the one-line summary; extend for new tool input shapes.
   for (const key of ["command", "file_path", "path", "pattern", "url", "query"]) {
     const v = o[key];
     if (typeof v === "string") return v;

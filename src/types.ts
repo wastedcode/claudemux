@@ -69,7 +69,7 @@ export interface Progress {
   readonly phase: "prompt" | "tool" | "composing" | "done" | "unknown";
   /** A tool is legitimately running (a `tool-start` with no matching `tool-end`). */
   readonly toolInFlight: boolean;
-  /** Count of completed transcript blocks (a coarse, monotonic progress signal). */
+  /** Count of parsed transcript messages (a coarse, monotonic progress signal). */
   readonly transcriptCount: number;
   /**
    * Whether the hook channel is delivering. `false` means observe has degraded
@@ -197,7 +197,11 @@ export interface SessionHandle {
    */
   wait(opts?: ReadyOpts): Promise<IdleState>;
 
-  /** Return the current classifier verdict; pure read. */
+  /**
+   * Return the current pane-classifier verdict; pure read. This is the
+   * pane-scrape signal {@link wait} uses. For turn lifecycle, prefer
+   * {@link progress} (the reliable hook + transcript channel).
+   */
   state(): Promise<State>;
 
   /**

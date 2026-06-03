@@ -98,3 +98,42 @@ describe("observeProgress + readMessages (fs, via the agent seam)", () => {
     expect(readMessages({ agent: claude, transcriptPath: "/nope/y.jsonl" })).toEqual([]);
   });
 });
+
+describe("observeProgress — composing boundary + out-of-order edge sorting", () => {
+  it("a rendezvous ending on PostToolUse derives phase=composing (via the real fs path)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cmux-obs2-"));
+    try {
+      const rv = join(dir, "turns.ndjson");
+      writeFileSync(
+        rv,
+        [
+          '1700000001.0 {"hook_event_name":"UserPromptSubmit"}',
+          '1700000002.0 {"hook_event_name":"PreToolUse","tool_name":"Bash"}',
+          '1700000003.0 {"hook_event_name":"PostToolUse","tool_name":"Bash"}',
+        ].join("\n"),
+      );
+      const p = observeProgress({ agent: claude, rendezvousPath: rv });
+      expect(p).toMatchObject({ phase: "composing", toolInFlight: false, state: "working" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives phase from the latest edge BY TIME, not by file order (writes can race)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cmux-obs3-"));
+    try {
+      const rv = join(dir, "turns.ndjson");
+      // Stop (latest by time) written BEFORE an earlier prompt-submit line.
+      writeFileSync(
+        rv,
+        [
+          '1700000009.0 {"hook_event_name":"Stop"}',
+          '1700000001.0 {"hook_event_name":"UserPromptSubmit"}',
+        ].join("\n"),
+      );
+      expect(observeProgress({ agent: claude, rendezvousPath: rv }).phase).toBe("done");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

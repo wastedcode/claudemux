@@ -81,6 +81,36 @@ const paneText = await session.capture();
 await session.kill();
 ```
 
+### Reading a turn's output (`send` → `messagesSince` / `progress`)
+
+`send()` returns a **`Cursor`** anchored at that turn. Read back the messages the
+turn produced as structured, backend-neutral `Message`s — no pane-scraping:
+
+```ts
+const cursor = await session.send("Summarize the README in one line");
+await session.wait();                          // turn settles
+const msgs = await session.messagesSince(cursor);
+// → [{ role: "user", parts: [{ kind: "text", text }] },
+//    { role: "assistant", parts: [{ kind: "text", text }, { kind: "tool", tool, summary }, …] }]
+```
+
+For *reliable* "is it working / done?", use `progress()` — fused from the agent's
+**hooks + transcript** (deterministic), not the TUI:
+
+```ts
+const p = await session.progress();
+// { phase: "prompt"|"tool"|"composing"|"done"|"unknown",
+//   toolInFlight: boolean,        // a tool is legitimately running (not hung)
+//   transcriptCount: number,
+//   hookChannelHealthy: boolean,  // false → degraded to best-effort pane fallback
+//   state }
+```
+
+Patience is **yours**: poll `progress()` until `phase === "done"` (or your own
+budget elapses) — claudemux reports the signal, never an idle timeout. Hooks are
+injected on spawn by default; opt out with `create({ hooks: false })` (observe
+then degrades to the pane fallback and says so via `hookChannelHealthy: false`).
+
 Bare-name operations (no handle needed):
 
 ```ts

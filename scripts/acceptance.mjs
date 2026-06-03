@@ -46,7 +46,10 @@ try {
     p = await session.progress();
     if (phasesSeen.at(-1) !== p.phase) {
       phasesSeen.push(p.phase);
-      log("phase", `${p.phase}  (hookChannelHealthy=${p.hookChannelHealthy}, toolInFlight=${p.toolInFlight})`);
+      log(
+        "phase",
+        `${p.phase}  (hookChannelHealthy=${p.hookChannelHealthy}, toolInFlight=${p.toolInFlight})`,
+      );
     }
     if (p.phase === "done") break;
     await new Promise((r) => setTimeout(r, 400));
@@ -58,16 +61,24 @@ try {
   console.log(`\n[4] messagesSince(cursor) — read the turn's conversation\n`);
   const msgs = await session.messagesSince(cursor);
   for (const m of msgs) {
-    const text = m.parts.map((x) => (x.kind === "text" ? x.text : `[${x.kind}:${x.tool ?? ""}]`)).join("");
+    const text = m.parts
+      .map((x) => (x.kind === "text" ? x.text : `[${x.kind}:${x.tool ?? ""}]`))
+      .join("");
     log(m.role, text);
   }
   const reply = msgs.find((m) => m.role === "assistant");
   check("assistant reply present", Boolean(reply));
-  check("reply is PONG", reply?.parts.some((x) => x.kind === "text" && x.text.includes("PONG")) ?? false);
+  check(
+    "reply is PONG",
+    reply?.parts.some((x) => x.kind === "text" && x.text.includes("PONG")) ?? false,
+  );
 
   console.log(`\n[5] state() + capture() — the other reads\n`);
   log("state()", await session.state());
-  log("capture() tail", (await session.capture({ lines: 3 })).split("\n").filter(Boolean).at(-1) ?? "");
+  log(
+    "capture() tail",
+    (await session.capture({ lines: 3 })).split("\n").filter(Boolean).at(-1) ?? "",
+  );
 } finally {
   if (session) {
     await session.kill();
