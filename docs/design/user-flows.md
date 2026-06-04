@@ -76,14 +76,15 @@ per-session readiness; it does not throttle).
 baseline divergence (the stateless-CLI path), not only on an observed `working`
 frame. No false `budget-exceeded`.
 
-**F10 — Lost Enter during the boot race. ⚠️**
+**F10 — Lost Enter during the boot race. ⚠️ (sentinel done, retry open)**
 *Journey:* the send lands while the REPL is still painting; the Enter is dropped.
 *Expected:* `send` anchors the cursor on the user record it produced; if that
-record never appears it returns a **count-fallback cursor** — the
-delivery-unconfirmed signal. *Standardize:* surface delivery-confirmed vs not as a
-first-class result (today it's an opaque count cursor). Posse's
-`deliverWithConfirm` re-sends a bare Enter then the whole text; claudemux should
-own that retry, or expose `DeliveryUnconfirmed` so the consumer can.
+record never appears it returns the exported **`DELIVERY_UNCONFIRMED`** sentinel
+(S11) — detectable, and reads empty against `messagesSince`/`turnComplete` so the
+consumer re-sends. *Still open (S3):* claudemux could OWN Posse's
+`deliverWithConfirm` retry (bare-Enter then re-paste) instead of leaving it to the
+consumer — lower priority now that boot waits for a stable ready box before the
+first send.
 
 **F11 — Multi-line / pasted prompt. ✅**
 *Expected:* delivered as ONE logical turn (bracketed paste + a separate Enter) —
@@ -304,7 +305,7 @@ every resumed session's belief is poisoned by prior-life edges. *Standardize:* t
 belief must reset at each `session-start` boundary — only consider edges since the
 latest one. (Root fix for S1 + the cleanest fix for F20/F37.)
 
-**F39 — Unbounded rendezvous + transcript growth → O(n) per poll. ⚠️**
+**F39 — Unbounded rendezvous + transcript growth → O(n) per poll. ✅ (S10)**
 *Hidden:* both files are append-only and never truncated. `readHookEdges` /
 `readThread` parse the WHOLE file on every `progress`/`wait` poll. A build agent
 running for days with thousands of edges/messages makes each poll O(n). *Bites:*
@@ -422,7 +423,7 @@ pane/transcript.
 | S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |
 | S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
 | S8 | ⬜ | **Long-think non-stuck:** confirm a `working` pane suppresses stuck-detection; add a live test. | F17 |
-| S10 | ⬜ | **Bounded reads:** tail/offset the rendezvous + transcript instead of full-file scans per poll. | F39 |
+| **S10** | ✅ **done** | **Bounded reads:** a per-handle `SessionObserver` with incremental `TailReader`s — each `state`/`progress`/`wait`/`messagesSince` poll parses only newly-appended bytes (O(delta), not O(file)). The whole read path (handle + wait) was restructured to defer to it; the old full-read observer functions removed. | F39 |
 | **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
 | **S12** | ✅ **done** | **Dup-prompt anchoring** — already correct: `anchorOwnTurn` iterates newest-first and excludes the pre-send id-set, so a duplicate prompt anchors the NEW record. | F41 |
 | S13 | ⬜ | **Compaction-safe reads:** positional fallback when the causal walk yields nothing but the transcript grew. | F43, F25 |

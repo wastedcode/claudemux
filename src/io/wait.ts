@@ -1,8 +1,6 @@
-import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { assembleBelief } from "../observe/observer.js";
-import { CLASSIFIER_BOTTOM_N, CLASSIFIER_CAPTURE } from "../session/constants.js";
-import { classify } from "../state/classifier.js";
+import type { Belief } from "../observe/observer.js";
+import { CLASSIFIER_BOTTOM_N } from "../session/constants.js";
 import type { ReadyOpts, TurnOutcome } from "../types.js";
 import { sleep } from "../util/sleep.js";
 import { paneFingerprint, readSendBaseline } from "./baseline.js";
@@ -31,11 +29,19 @@ interface WaitDeps {
 }
 
 /**
+ * Reads the fused {@link Belief} for one poll, plus the raw pane text the
+ * fingerprint/arming need. Injected by the handle so `wait()` shares the handle's
+ * **incremental** observer (bounded per-poll reads) and never re-reads files or
+ * touches the agent itself.
+ */
+export type BeliefReader = () => Promise<{ belief: Belief; paneText: string }>;
+
+/**
  * Wait until the turn reaches a terminal {@link TurnOutcome} — the **compound
  * owner** of "the turn stopped, and why." It composes two atomic sub-owners and
  * re-derives neither's internals:
- *   - the **observe** sub-owner ({@link assembleBelief}: hooks + transcript +
- *     pane) yields `completed` / `awaiting` / `aborted`;
+ *   - the **observe** sub-owner (the injected {@link BeliefReader}: hooks +
+ *     transcript + pane) yields `completed` / `awaiting` / `aborted`;
  *   - the **policy** sub-owner (the patience budget, here) yields
  *     `budget-exceeded` — `reason:"max"` (wall-clock) vs `"idle"` (wedged).
  *
@@ -50,16 +56,18 @@ interface WaitDeps {
  * `completed` requires a `stop` edge newer than this wait, or a fresh arm.
  *
  * `dialog`/`permission-prompt`/`aborted` are actionable and return immediately
- * (no settle) — they are not "the previous idle." Never throws on timeout: a
- * budget overrun is a returned `budget-exceeded`, not an exception.
+ * (no settle). Never throws on timeout: a budget overrun is a returned
+ * `budget-exceeded`, not an exception. (A capture failure inside the reader DOES
+ * propagate — a gone session is terminal, not a budget matter.)
  */
 export async function waitForOutcome(
   backend: Backend,
-  agent: AgentDef,
   ref: SessionRef,
-  paths: { rendezvousPath?: string; transcriptPath?: string },
   opts: ReadyOpts,
   deps: WaitDeps = { stabilize: defaultStabilize },
+  readBelief: BeliefReader = () => {
+    throw new Error("waitForOutcome requires a BeliefReader");
+  },
 ): Promise<TurnOutcome> {
   const budget = opts.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
   const start = Date.now();
@@ -74,19 +82,8 @@ export async function waitForOutcome(
   while (true) {
     const now = Date.now();
 
-    // ── observe sub-owner: form the one belief ──────────────────────────────
-    // A capture failure means the session/server is gone (terminal) — let the
-    // typed SessionGone/BackendUnreachable propagate rather than poll a corpse.
-    const paneText = await backend.capture(ref, CLASSIFIER_CAPTURE);
-    const belief = assembleBelief({
-      agent,
-      ...(paths.rendezvousPath === undefined ? {} : { rendezvousPath: paths.rendezvousPath }),
-      ...(paths.transcriptPath === undefined ? {} : { transcriptPath: paths.transcriptPath }),
-      pane: {
-        state: classify(paneText, agent.rules),
-        interrupted: agent.rules.interrupted?.(paneText) ?? false,
-      },
-    });
+    // ── observe sub-owner: the one belief (incremental, via the handle) ──────
+    const { belief, paneText } = await readBelief();
 
     // ── terminal verdicts the observe sub-owner already settles ─────────────
     if (belief.state === "dialog") return { kind: "awaiting", on: "dialog" };
@@ -113,7 +110,8 @@ export async function waitForOutcome(
         timeoutMs: Math.min(remaining, IDLE_STABLE_WINDOW_MS * 4),
         ansi: true,
       });
-      if (r.stable && agent.rules.idle(r.text)) return { kind: "completed" };
+      // Re-confirm via the belief (the one owner), not raw pane rules.
+      if (r.stable && (await readBelief()).belief.state === "idle") return { kind: "completed" };
     }
 
     // ── policy sub-owner: budget / stuck ────────────────────────────────────

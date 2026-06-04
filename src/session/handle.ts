@@ -4,13 +4,8 @@ import { interruptOnce } from "../io/interrupt.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForOutcome } from "../io/wait.js";
-import {
-  type Belief,
-  assembleBelief,
-  readMessages,
-  readThread,
-  resolveTranscriptPath,
-} from "../observe/observer.js";
+import type { Belief } from "../observe/observer.js";
+import { SessionObserver } from "../observe/session-observer.js";
 import { classify } from "../state/classifier.js";
 import type {
   BackendCommandEvent,
@@ -70,6 +65,32 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
   // the hook nor the pane can tell aborted from working — but the handle knows.
   let interruptPending = false;
 
+  // The per-handle stateful read core: incremental (bounded) reads of the hook
+  // rendezvous + transcript. state()/progress()/wait()/messagesSince all defer to
+  // it — one owner of "what's true", parsing only newly-appended bytes per poll.
+  const rv = rendezvousPath(deps);
+  const observer = new SessionObserver({
+    agent: deps.agent,
+    ...(rv === undefined ? {} : { rendezvousPath: rv }),
+    ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
+  });
+
+  /**
+   * Capture + classify the pane, fuse with the observer's belief. The capture
+   * failure is NOT swallowed: in tmux a failed capture means the session/server
+   * is gone (terminal), so `SessionGone`/`BackendUnreachable` propagates.
+   */
+  const readBelief = async (
+    weInterrupted: boolean,
+  ): Promise<{ belief: Belief; paneText: string }> => {
+    const paneText = await deps.backend.capture(ref, CLASSIFIER_CAPTURE);
+    const pane = {
+      state: classify(paneText, deps.agent.rules),
+      interrupted: deps.agent.rules.interrupted?.(paneText) ?? false,
+    };
+    return { belief: observer.belief(pane, weInterrupted), paneText };
+  };
+
   return {
     name: deps.name,
     namespace: deps.namespace,
@@ -77,26 +98,25 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     send: (text) =>
       mutex.run(async () => {
         interruptPending = false; // a new turn supersedes any pending interrupt
-        const before = transcriptMessages(deps);
-        const beforeIds = new Set(before.map((m) => m.id));
+        const beforeIds = new Set(observer.thread().messages.map((m) => m.id));
         await sendOnce(deps.backend, deps.agent, ref, text);
         // Anchor the cursor on OUR OWN user record, not a positional count.
         // A count read here is wrong: the PRIOR turn's reply may not have flushed
         // yet (the transcript trails the done signal by ~100ms), and a human may
         // type an interleaved turn. Anchoring on the record this send produced is
-        // immune to both. Fall back to a count only if it never appears.
-        const ownId = await anchorOwnTurn(deps, beforeIds, text);
+        // immune to both. Fall back to the sentinel only if it never appears.
+        const ownId = await anchorOwnTurn(observer, beforeIds, text);
         return ownId ?? DELIVERY_UNCONFIRMED; // no anchor → unconfirmed (never a count)
       }),
-    messagesSince: (cursor) => mutex.run(async () => messagesSince(deps, cursor)),
+    messagesSince: (cursor) => mutex.run(async () => messagesSince(observer, cursor)),
     turnComplete: (cursor) =>
-      mutex.run(async () => messagesSince(deps, cursor).some((m) => m.role === "assistant")),
+      mutex.run(async () => messagesSince(observer, cursor).some((m) => m.role === "assistant")),
     progress: () =>
       mutex.run(async () => {
-        const b = await readBelief(deps, ref, interruptPending);
-        // Project the belief to the public Progress; the extra belief fields
-        // (interrupted / edge timings) are wait()'s concern, not progress()'s.
-        const { phase, toolInFlight, transcriptCount, hookChannelHealthy, state } = b;
+        const { belief } = await readBelief(interruptPending);
+        // Project to the public Progress; the extra belief fields (interrupted /
+        // edge timings) are wait()'s concern, not progress()'s.
+        const { phase, toolInFlight, transcriptCount, hookChannelHealthy, state } = belief;
         return {
           phase,
           toolInFlight,
@@ -115,21 +135,11 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         // We issued an interrupt and haven't sent since — there is no turn to
         // wait for; report the abort rather than poll a frozen spinner to budget.
         if (interruptPending) return Promise.resolve<TurnOutcome>({ kind: "aborted" });
-        const rv = rendezvousPath(deps);
-        const tp = transcriptPath(deps);
-        return waitForOutcome(
-          deps.backend,
-          deps.agent,
-          ref,
-          {
-            ...(rv === undefined ? {} : { rendezvousPath: rv }),
-            ...(tp === undefined ? {} : { transcriptPath: tp }),
-          },
-          opts ?? {},
-          { stabilize },
+        return waitForOutcome(deps.backend, ref, opts ?? {}, { stabilize }, () =>
+          readBelief(false),
         );
       }),
-    state: () => mutex.run(async () => (await readBelief(deps, ref, interruptPending)).state),
+    state: () => mutex.run(async () => (await readBelief(interruptPending)).belief.state),
     capture: (opts) => mutex.run(() => deps.backend.capture(ref, opts)),
     kill: () => mutex.run(() => deps.backend.kill(ref)),
     onBackendCommand: (handler: (event: BackendCommandEvent) => void) =>
@@ -144,51 +154,17 @@ function rendezvousPath(deps: HandleDeps): string | undefined {
 }
 
 /**
- * The agent's transcript file for this session, when locatable. Prefers the
- * authoritative path the hook reported (via the Observer) over the fragile glob.
- */
-function transcriptPath(deps: HandleDeps): string | undefined {
-  const rv = rendezvousPath(deps);
-  return (
-    resolveTranscriptPath({
-      agent: deps.agent,
-      ...(rv === undefined ? {} : { rendezvousPath: rv }),
-      ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
-    }) ?? undefined
-  );
-}
-
-/** All messages in the session transcript, or `[]` when it can't be located. */
-function transcriptMessages(deps: HandleDeps): Message[] {
-  const path = transcriptPath(deps);
-  return path === undefined ? [] : readMessages({ agent: deps.agent, transcriptPath: path });
-}
-
-/**
  * The messages produced since `cursor` — the shared body of `messagesSince` and
- * `turnComplete`. Causal-chain when the cursor is a real message id; positional /
- * count fallback for a legacy or delivery-unconfirmed cursor.
+ * `turnComplete`, read from the observer's incremental transcript cache. Causal
+ * chain when the cursor is a real message id; clean positional slice for a legacy
+ * numeric cursor; EMPTY for an unresolvable cursor (sentinel/garbage) — never the
+ * whole transcript (F40).
  */
-function messagesSince(deps: HandleDeps, cursor: string): Message[] {
-  const { messages: all, parentOf } = transcriptThread(deps);
+function messagesSince(observer: SessionObserver, cursor: string): Message[] {
+  const { messages: all, parentOf } = observer.thread();
   if (all.some((m) => m.id === cursor)) return descendantsOf(all, parentOf, cursor);
-  // An explicit, *clean* positional cursor still slices (legacy, non-durable —
-  // positions shift as the transcript grows). Anything else — the
-  // DELIVERY_UNCONFIRMED sentinel, a stale/garbage cursor — reads EMPTY, never
-  // the whole transcript. A cursor that can't be resolved must not flood (F40).
   const n = Number.parseInt(cursor, 10);
   return Number.isFinite(n) && n >= 0 && String(n) === cursor.trim() ? all.slice(n) : [];
-}
-
-/** Messages + the full ancestry graph (bridges non-message records), or empty. */
-function transcriptThread(deps: HandleDeps): {
-  messages: Message[];
-  parentOf: Map<string, string | undefined>;
-} {
-  const path = transcriptPath(deps);
-  return path === undefined
-    ? { messages: [], parentOf: new Map() }
-    : readThread({ agent: deps.agent, transcriptPath: path });
 }
 
 /**
@@ -200,7 +176,7 @@ function transcriptThread(deps: HandleDeps): {
  * positional slice so a thread-less transcript still works.
  */
 function descendantsOf(
-  all: Message[],
+  all: readonly Message[],
   fullParentOf: Map<string, string | undefined>,
   ancestorId: string,
 ): Message[] {
@@ -212,7 +188,7 @@ function descendantsOf(
   const hasLinks = [...parentOf.values()].some((p) => p !== undefined);
   if (!hasLinks) {
     const idx = all.findIndex((m) => m.id === ancestorId);
-    return idx >= 0 ? all.slice(idx + 1) : all;
+    return idx >= 0 ? all.slice(idx + 1) : all.slice();
   }
   const descends = (id: string): boolean => {
     const seen = new Set<string>();
@@ -238,13 +214,13 @@ const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
  * shortly after delivery; `undefined` if it never appears (a delivery problem).
  */
 async function anchorOwnTurn(
-  deps: HandleDeps,
+  observer: SessionObserver,
   beforeIds: Set<string>,
   text: string,
 ): Promise<string | undefined> {
   const needle = squash(text).slice(0, 80); // prefix tolerates echo reflow / truncation
   for (let attempt = 0; attempt < ANCHOR_POLLS; attempt++) {
-    const msgs = transcriptMessages(deps);
+    const msgs = observer.thread().messages;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       if (m === undefined || m.role !== "user" || beforeIds.has(m.id)) continue;
@@ -253,35 +229,6 @@ async function anchorOwnTurn(
     await sleep(ANCHOR_POLL_MS);
   }
   return undefined;
-}
-
-/**
- * Read the one fused {@link Belief} — the single owner `state()`/`progress()`
- * defer to. Captures + classifies the pane, then fuses with the hook edges +
- * transcript via {@link assembleBelief}. A capture failure is **not** swallowed:
- * in tmux a failed capture means the session/server is gone (a terminal
- * condition), so the typed `SessionGone`/`BackendUnreachable` propagates — the
- * caller asked about a session that no longer exists, and should hear so.
- */
-async function readBelief(
-  deps: HandleDeps,
-  ref: SessionRef,
-  weInterrupted: boolean,
-): Promise<Belief> {
-  const text = await deps.backend.capture(ref, CLASSIFIER_CAPTURE);
-  const pane = {
-    state: classify(text, deps.agent.rules),
-    interrupted: deps.agent.rules.interrupted?.(text) ?? false,
-  };
-  const rv = rendezvousPath(deps);
-  const tp = transcriptPath(deps);
-  return assembleBelief({
-    agent: deps.agent,
-    ...(rv === undefined ? {} : { rendezvousPath: rv }),
-    ...(tp === undefined ? {} : { transcriptPath: tp }),
-    pane,
-    weInterrupted,
-  });
 }
 
 /**

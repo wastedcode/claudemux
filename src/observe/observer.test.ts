@@ -4,15 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { claude } from "../agents/claude.js";
 import type { HookEdge } from "../agents/types.js";
-import {
-  assembleBelief,
-  believe,
-  currentLifeEdges,
-  deriveProgress,
-  observeProgress,
-  readHookEdges,
-  readMessages,
-} from "./observer.js";
+import { believe, currentLifeEdges, deriveProgress, readHookEdges } from "./observer.js";
 
 function edge(event: HookEdge["event"], at: number): HookEdge {
   return { event, at };
@@ -56,54 +48,6 @@ describe("deriveProgress (pure)", () => {
       transcriptCount: 3,
     });
     expect(p).toMatchObject({ phase: "done", state: "idle", toolInFlight: false });
-  });
-});
-
-describe("observeProgress + readMessages (fs, via the agent seam)", () => {
-  it("reads the rendezvous + transcript and fuses a Progress; reads messages", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cmux-obs-"));
-    try {
-      // A real turn's markers (ts-prefixed, as the hook writes them).
-      const rv = join(dir, "turns.ndjson");
-      writeFileSync(
-        rv,
-        [
-          '1780520910.70 {"hook_event_name":"SessionStart"}',
-          '1780520911.00 {"hook_event_name":"UserPromptSubmit"}',
-          '1780520912.28 {"hook_event_name":"Stop"}',
-        ].join("\n"),
-      );
-      // A transcript with one user turn + one assistant reply + a metadata line.
-      const tx = join(dir, "session.jsonl");
-      writeFileSync(
-        tx,
-        [
-          '{"type":"user","message":{"role":"user","content":"hi"},"uuid":"u1"}',
-          '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"PONG"}]},"uuid":"a1"}',
-          '{"type":"file-history-snapshot","uuid":"m1"}',
-        ].join("\n"),
-      );
-
-      const p = observeProgress({ agent: claude, rendezvousPath: rv, transcriptPath: tx });
-      expect(p).toMatchObject({ phase: "done", state: "idle", hookChannelHealthy: true });
-      expect(p.transcriptCount).toBe(2); // the metadata line is not a message
-
-      const msgs = readMessages({ agent: claude, transcriptPath: tx });
-      expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
-      expect(msgs[1]?.parts).toEqual([{ kind: "text", text: "PONG" }]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("missing files degrade to unknown/empty — never throws", () => {
-    const p = observeProgress({
-      agent: claude,
-      rendezvousPath: "/nope/x.ndjson",
-      transcriptPath: "/nope/y.jsonl",
-    });
-    expect(p).toMatchObject({ phase: "unknown", hookChannelHealthy: false, transcriptCount: 0 });
-    expect(readMessages({ agent: claude, transcriptPath: "/nope/y.jsonl" })).toEqual([]);
   });
 });
 
@@ -214,44 +158,6 @@ describe("believe — the one fused belief (state()/progress()/wait() defer to i
   });
 });
 
-describe("assembleBelief (wires hook + transcript reads, fuses with the pane)", () => {
-  it("reads edges + transcript count from disk and fuses with the pane", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cmux-belief-"));
-    try {
-      const rv = join(dir, "turns.ndjson");
-      writeFileSync(
-        rv,
-        [
-          '1700000001.0 {"hook_event_name":"UserPromptSubmit"}',
-          '1700000002.0 {"hook_event_name":"Stop"}',
-        ].join("\n"),
-      );
-      const tx = join(dir, "s.jsonl");
-      writeFileSync(
-        tx,
-        [
-          '{"type":"user","message":{"role":"user","content":"hi"},"uuid":"u1"}',
-          '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"yo"}]},"uuid":"a1"}',
-        ].join("\n"),
-      );
-      const b = assembleBelief({
-        agent: claude,
-        rendezvousPath: rv,
-        transcriptPath: tx,
-        pane: { state: "unknown", interrupted: false },
-      });
-      expect(b).toMatchObject({
-        state: "idle",
-        phase: "done",
-        transcriptCount: 2,
-        lastStopAt: 1_700_000_002_000,
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("readHookEdges (the boot-ready signal source)", () => {
   it("returns the session-start edge chronologically; absent file → empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "cmux-edges-"));
@@ -276,41 +182,12 @@ describe("readHookEdges (the boot-ready signal source)", () => {
   });
 });
 
-describe("observeProgress — composing boundary + out-of-order edge sorting", () => {
-  it("a rendezvous ending on PostToolUse derives phase=composing (via the real fs path)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cmux-obs2-"));
-    try {
-      const rv = join(dir, "turns.ndjson");
-      writeFileSync(
-        rv,
-        [
-          '1700000001.0 {"hook_event_name":"UserPromptSubmit"}',
-          '1700000002.0 {"hook_event_name":"PreToolUse","tool_name":"Bash"}',
-          '1700000003.0 {"hook_event_name":"PostToolUse","tool_name":"Bash"}',
-        ].join("\n"),
-      );
-      const p = observeProgress({ agent: claude, rendezvousPath: rv });
-      expect(p).toMatchObject({ phase: "composing", toolInFlight: false, state: "working" });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("derives phase from the latest edge BY TIME, not by file order (writes can race)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cmux-obs3-"));
-    try {
-      const rv = join(dir, "turns.ndjson");
-      // Stop (latest by time) written BEFORE an earlier prompt-submit line.
-      writeFileSync(
-        rv,
-        [
-          '1700000009.0 {"hook_event_name":"Stop"}',
-          '1700000001.0 {"hook_event_name":"UserPromptSubmit"}',
-        ].join("\n"),
-      );
-      expect(observeProgress({ agent: claude, rendezvousPath: rv }).phase).toBe("done");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+describe("deriveProgress — composing boundary", () => {
+  it("a sequence ending on tool-end derives phase=composing", () => {
+    const p = deriveProgress({
+      edges: [edge("prompt-submit", 1), edge("tool-start", 2), edge("tool-end", 3)],
+      transcriptCount: 2,
+    });
+    expect(p).toMatchObject({ phase: "composing", toolInFlight: false, state: "working" });
   });
 });

@@ -4,7 +4,7 @@ import { sanitizePasteBody } from "./keys.js";
 describe("sanitizePasteBody — paste-injection defense (F48)", () => {
   it("removes the bracketed-paste END marker so a body can't close the bracket early", () => {
     // Without this, ESC[201~ ends the paste and `\n rm -rf` submits as typed input.
-    const evil = `look at this\x1b[201~\nrm -rf /`;
+    const evil = "look at this\x1b[201~\nrm -rf /";
     const out = sanitizePasteBody(evil);
     expect(out).not.toContain("\x1b");
     expect(out).not.toContain("[201~");

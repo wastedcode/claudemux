@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { AgentDef, HookEdge } from "../agents/types.js";
-import type { Message, Progress, State } from "../types.js";
+import type { Progress, State } from "../types.js";
 
 /**
  * The Observer — **agent-agnostic** fusion of the reliable observe signals into
@@ -153,44 +153,11 @@ export function believe(o: {
 }
 
 /**
- * Assemble the {@link Belief} from the on-disk signals (hook rendezvous +
- * transcript) and a **pre-classified** pane. The caller — which holds the
- * backend — captures the pane and classifies it with the agent's rules (state +
- * interrupted); this wires the file reads and fuses via {@link believe}. Keeps
- * the Observer agent-agnostic (no classification here) while remaining the one
- * place the belief is formed.
- */
-export function assembleBelief(o: {
-  agent: AgentDef;
-  rendezvousPath?: string;
-  transcriptPath?: string;
-  pane: { state: State; interrupted: boolean };
-  weInterrupted?: boolean;
-}): Belief {
-  const edges =
-    o.rendezvousPath === undefined
-      ? []
-      : readHookEdges({ agent: o.agent, rendezvousPath: o.rendezvousPath });
-  let transcriptCount = 0;
-  const transcript = o.agent.transcript;
-  if (o.transcriptPath !== undefined && transcript !== undefined) {
-    for (const line of readLines(o.transcriptPath)) {
-      if (transcript.parseLine(line) !== null) transcriptCount += 1;
-    }
-  }
-  return believe({
-    edges,
-    transcriptCount,
-    pane: o.pane,
-    ...(o.weInterrupted === undefined ? {} : { weInterrupted: o.weInterrupted }),
-  });
-}
-
-/**
  * Read the hook rendezvous into ordered {@link HookEdge}s (chronological).
  * Empty when hooks are off, the agent has no hook spec, or the file is absent
- * — degrades, never throws. The agent owns the marker grammar
- * ({@link AgentDef.hooks.parseMarker}); this stays agent-agnostic.
+ * — degrades, never throws. A FULL read: used by `bootSession` (a one-shot, not
+ * a hot path); the per-poll session path is the incremental
+ * {@link import('./session-observer.js').SessionObserver}.
  */
 export function readHookEdges(o: { agent: AgentDef; rendezvousPath: string }): HookEdge[] {
   const hooks = o.agent.hooks;
@@ -202,92 +169,4 @@ export function readHookEdges(o: { agent: AgentDef; rendezvousPath: string }): H
   }
   edges.sort((a, b) => a.at - b.at);
   return edges;
-}
-
-/**
- * Resolve the session's transcript path, preferring the **authoritative**
- * locator the hook reported (`transcriptPath` on the latest edge that carries
- * one) over the agent's fragile on-disk recompute/glob. Falls back to the
- * agent's `locate()` when hooks are off/absent, then to `null`. This is the
- * fusion that lets us stop globbing whenever the hook channel is live.
- */
-export function resolveTranscriptPath(o: {
-  agent: AgentDef;
-  rendezvousPath?: string;
-  agentSessionId?: string;
-}): string | null {
-  if (o.rendezvousPath !== undefined) {
-    const edges = readHookEdges({ agent: o.agent, rendezvousPath: o.rendezvousPath });
-    for (let i = edges.length - 1; i >= 0; i--) {
-      const p = edges[i]?.transcriptPath;
-      if (p !== undefined) return p;
-    }
-  }
-  const transcript = o.agent.transcript;
-  if (transcript !== undefined && o.agentSessionId !== undefined) {
-    return transcript.locate({ agentSessionId: o.agentSessionId });
-  }
-  return null;
-}
-
-/** Read the hook rendezvous + transcript and produce a fused {@link Progress}. */
-export function observeProgress(o: {
-  agent: AgentDef;
-  rendezvousPath?: string;
-  transcriptPath?: string;
-}): Progress {
-  const edges =
-    o.rendezvousPath === undefined
-      ? []
-      : readHookEdges({ agent: o.agent, rendezvousPath: o.rendezvousPath });
-
-  let transcriptCount = 0;
-  const transcript = o.agent.transcript;
-  if (o.transcriptPath !== undefined && transcript !== undefined) {
-    for (const line of readLines(o.transcriptPath)) {
-      if (transcript.parseLine(line) !== null) transcriptCount += 1;
-    }
-  }
-
-  return deriveProgress({ edges: currentLifeEdges(edges), transcriptCount });
-}
-
-/** Read the transcript into neutral {@link Message}s (skips metadata/partial lines). */
-export function readMessages(o: { agent: AgentDef; transcriptPath: string }): Message[] {
-  const transcript = o.agent.transcript;
-  if (transcript === undefined) return [];
-  const out: Message[] = [];
-  for (const line of readLines(o.transcriptPath)) {
-    const m = transcript.parseLine(line);
-    if (m !== null) out.push(m);
-  }
-  return out;
-}
-
-/**
- * Read the transcript once into both the surfaced {@link Message}s and the
- * **full** ancestry graph (`id → parentId` over *every* linkable record, not
- * just messages). The graph lets a consumer detect message descendants even
- * when the causal chain passes through records {@link readMessages} drops (e.g.
- * the `attachment` records claude threads between a prompt and its reply). When
- * the agent exposes no `parseEdge`, `parentOf` is empty and callers fall back
- * to message-only links.
- */
-export function readThread(o: { agent: AgentDef; transcriptPath: string }): {
-  messages: Message[];
-  parentOf: Map<string, string | undefined>;
-} {
-  const transcript = o.agent.transcript;
-  const messages: Message[] = [];
-  const parentOf = new Map<string, string | undefined>();
-  if (transcript === undefined) return { messages, parentOf };
-  for (const line of readLines(o.transcriptPath)) {
-    const m = transcript.parseLine(line);
-    if (m !== null) messages.push(m);
-    if (transcript.parseEdge !== undefined) {
-      const e = transcript.parseEdge(line);
-      if (e !== null) parentOf.set(e.id, e.parentId);
-    }
-  }
-  return { messages, parentOf };
 }

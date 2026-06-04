@@ -57,12 +57,12 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
   it("isolates a turn from the prior one (cursor=u2 → only turn-2 output)", async () => {
     writeFileSync(
       tx,
-      [
+      `${[
         userRec("u1", null, "ONE"),
         asstRec("a1", "u1", "reply ONE"),
         userRec("u2", "a1", "TWO"),
         asstRec("a2", "u2", "reply TWO"),
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
     expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO");
     expect(txt(await handle().messagesSince("u1"))).toContain("reply ONE");
@@ -74,12 +74,12 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
     // causally correct. A positional slice-after-u2 would leak a1; the chain must not.
     writeFileSync(
       tx,
-      [
+      `${[
         userRec("u1", null, "ONE"),
         userRec("u2", "a1", "TWO"),
         asstRec("a1", "u1", "reply ONE"),
         asstRec("a2", "u2", "reply TWO"),
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
     expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO"); // a1 excluded despite being later in the file
   });
@@ -88,27 +88,27 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
     // After our turn, a human types one (parent = our reply), then the agent answers.
     writeFileSync(
       tx,
-      [
+      `${[
         userRec("u1", null, "MINE"),
         asstRec("a1", "u1", "ok"),
         userRec("h1", "a1", "HUMAN"),
         asstRec("a2", "h1", "to human"),
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
     expect(txt(await handle().messagesSince("u1"))).toBe("ok HUMAN to human");
   });
 
   it("thread-less transcript → positional fallback; count + unknown cursors handled", async () => {
     // No parentUuid anywhere → fall back to slicing after the matching id.
-    const noLinks = [
+    const noLinks = `${[
       userRec("x1", null, "A"),
       '{"type":"assistant","uuid":"x2","message":{"role":"assistant","content":[{"type":"text","text":"B"}]}}',
-    ].join("\n");
+    ].join("\n")}\n`;
     writeFileSync(tx, noLinks);
     expect(txt(await handle().messagesSince("x1"))).toBe("B");
     // Explicit positional cursor still slices; an UNRESOLVABLE cursor (garbage,
     // or the delivery-unconfirmed sentinel) reads EMPTY — never the whole log (F40).
-    writeFileSync(tx, [userRec("u1", null, "ONE"), asstRec("a1", "u1", "reply")].join("\n"));
+    writeFileSync(tx, `${[userRec("u1", null, "ONE"), asstRec("a1", "u1", "reply")].join("\n")}\n`);
     expect((await handle().messagesSince("1")).length).toBe(1);
     expect((await handle().messagesSince("nope")).length).toBe(0);
     expect((await handle().messagesSince("delivery-unconfirmed")).length).toBe(0);
@@ -116,14 +116,12 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
 
   it("turnComplete: true when a reply descends from the cursor, false for a DANGLING turn (S2/F20)", async () => {
     // A completed turn: user → assistant.
-    writeFileSync(tx, [userRec("u1", null, "ASK"), asstRec("a1", "u1", "REPLY")].join("\n"));
+    writeFileSync(tx, `${[userRec("u1", null, "ASK"), asstRec("a1", "u1", "REPLY")].join("\n")}\n`);
     expect(await handle().turnComplete("u1")).toBe(true);
     // A crashed/in-flight turn: the prompt is recorded with NO assistant reply.
     writeFileSync(
       tx,
-      [userRec("u1", null, "DONE"), asstRec("a1", "u1", "ok"), userRec("u2", "a1", "ESSAY")].join(
-        "\n",
-      ),
+      `${[userRec("u1", null, "DONE"), asstRec("a1", "u1", "ok"), userRec("u2", "a1", "ESSAY")].join("\n")}\n`,
     );
     expect(await handle().turnComplete("u2")).toBe(false); // → the consumer re-sends u2
     expect(await handle().turnComplete("u1")).toBe(true); // the earlier turn DID complete
