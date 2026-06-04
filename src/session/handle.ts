@@ -2,6 +2,7 @@ import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
 import { PromptResponseUnsupported } from "../errors.js";
 import { interruptOnce } from "../io/interrupt.js";
+import { respondOnce } from "../io/respond.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForOutcome } from "../io/wait.js";
@@ -129,28 +130,19 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
       }),
     respond: (choice: PromptChoice) =>
       mutex.run(async () => {
-        // The agent owns the menu option-order; we only know "approve/deny", not
-        // a digit. No mapping → refuse rather than guess a key (a wrong guess
-        // could pick "allow all"). The consumer gates on a permission-prompt
-        // reading; the prompt is stable so that read does not race.
+        // Compose two sub-owners; own neither's internals. The AGENT owns the
+        // menu option-order (choice→key) — no mapping ⇒ refuse rather than guess
+        // a key (a wrong guess could pick "allow all"). The OBSERVER owns "is a
+        // prompt still showing" — injected as the confirm predicate. The io
+        // primitive owns delivery + settle.
         const key = deps.agent.permissionPrompt?.respondKey(choice);
         if (key === undefined) throw new PromptResponseUnsupported(deps.name, deps.agent.name);
-        await deps.backend.send(ref, { kind: "key", key });
-        // Self-confirm the answer landed before returning — the analog of send()
-        // anchoring its own user record. Without this the call returns while the
-        // menu is still up (claude repaints prompt→working only after processing
-        // the key), and a following wait() latches the STALE permission-prompt
-        // and reports awaiting again. The reliable signal is SEMANTIC: poll until
-        // the fused state is no longer `permission-prompt` (the menu actually
-        // cleared). Do NOT break on a raw pane diff — a cursor blink between two
-        // captures fires a spurious change before the key takes effect (the
-        // race this very loop exists to close). Bounded + best-effort: if it
-        // never clears (a second prompt stacked) we still return and the
-        // consumer's next wait() surfaces that prompt.
-        for (let i = 0; i < RESPOND_CONFIRM_POLLS; i++) {
-          if ((await readBelief(false)).belief.state !== "permission-prompt") break;
-          await sleep(RESPOND_CONFIRM_POLL_MS);
-        }
+        await respondOnce(
+          deps.backend,
+          ref,
+          key,
+          async () => (await readBelief(false)).belief.state === "permission-prompt",
+        );
       }),
     interrupt: () =>
       mutex.run(async () => {
@@ -232,11 +224,6 @@ function descendantsOf(
 
 const ANCHOR_POLLS = 12;
 const ANCHOR_POLL_MS = 250;
-// respond() confirm-window: poll up to ~5s for the answered prompt to clear.
-// Bounded + best-effort — a stuck key never wedges the call (it returns and the
-// consumer's next wait() re-reads).
-const RESPOND_CONFIRM_POLLS = 20;
-const RESPOND_CONFIRM_POLL_MS = 250;
 /** Collapse whitespace so a reflowed/echoed prompt still matches. */
 const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
 
