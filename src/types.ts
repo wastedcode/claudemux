@@ -130,6 +130,20 @@ export interface Progress {
    * the reliable fields accordingly.
    */
   readonly hookChannelHealthy: boolean;
+  /**
+   * **Drift canary.** `false` when EVERY observe channel came up blind against a
+   * non-empty pane at once: the pane has real content, yet the classifier read no
+   * state (`unknown`), no hook edges arrived, and no transcript messages parsed.
+   * That triple-blind is the signature of the agent's output format having
+   * **drifted** from what the parsers expect (a Claude Code update moved the idle
+   * box / hook payload / record shape). Any single channel producing signal — a
+   * recognized state, an edge, a parsed message, a known interrupt — keeps it
+   * `true`. A point-in-time snapshot: a consumer treats *persistent* `false` as
+   * "my version assumptions broke," not a one-frame blip. Distinct from
+   * `hookChannelHealthy` (one channel, often legitimately off) — this fires only
+   * when ALL channels are blind together.
+   */
+  readonly agentChannelHealthy: boolean;
   /** The fused state verdict. */
   readonly state: State;
 }

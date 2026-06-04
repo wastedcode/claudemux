@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`progress().agentChannelHealthy` — a Claude-drift canary.** New boolean on
+  `Progress` (and the fused belief). `false` when EVERY observe channel comes up
+  blind at once against a non-empty pane: the classifier read no state
+  (`unknown`), no hook edges arrived, and no transcript messages parsed — the
+  signature of a Claude Code update moving its output format (idle box / hook
+  payload / record shape) out from under the parsers. Any single channel with
+  signal (a recognized state, an edge, a parsed message, a known interrupt) keeps
+  it `true`; an empty/blank pane is never judged. A point-in-time snapshot — treat
+  *persistent* `false` as "re-check your version assumptions." Distinct from
+  `hookChannelHealthy` (one channel, often legitimately off). **Additive /
+  non-breaking.** See README §5.
 - **`send()` now recovers a lost submit (lost-Enter retry).** If the paste reaches
   the composer but the Enter keystroke is dropped (a boot-race / timing flake), the
   turn sits un-submitted and no user record appears. `send()` previously returned

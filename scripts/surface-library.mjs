@@ -8,7 +8,9 @@
  * (proves history continuity) · respond (permission-prompt) · kill. Isolated
  * socket; every session self-killed.
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { adopt, ask, create, exists, kill, list, resume } from "../dist/index.js";
 
 const CWD = "/tmp/cmux-surface";
@@ -84,6 +86,12 @@ async function main() {
     typeof p.phase === "string" && p.hookChannelHealthy === true,
     `${p.phase}/${p.hookChannelHealthy}`,
   );
+  // Drift canary must NOT false-alarm on a healthy live session.
+  rec(
+    "progress() agentChannelHealthy is true on a healthy session (no false drift)",
+    p.agentChannelHealthy === true,
+    String(p.agentChannelHealthy),
+  );
   rec("capture() returns pane text", (await s.capture()).length > 0);
 
   // ── adopt(): re-attach recovers the same id ─────────────────────────────
@@ -135,8 +143,10 @@ async function main() {
   await s2.kill();
 
   // ── respond(): answer a tool-approval prompt (default permission mode) ────
+  // Fresh cwd: a tool prompt only fires where the agent has no standing edit
+  // permission, so a reused cwd can auto-approve and never prompt.
   const pp = `surf-p-${Date.now().toString(36)}`;
-  const s3 = await create(opts(pp));
+  const s3 = await create({ ...opts(pp), cwd: mkdtempSync(join(tmpdir(), "cmux-surf-prompt-")) });
   await s3.send(
     "Create a file named surf-respond.txt with the word PONG. Use the Write tool. Do not ask first.",
   );

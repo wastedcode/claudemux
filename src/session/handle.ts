@@ -18,6 +18,7 @@ import type {
   SessionHandle,
   TurnOutcome,
 } from "../types.js";
+import { stripSgr } from "../util/ansi.js";
 import { sleep } from "../util/sleep.js";
 import { CLASSIFIER_CAPTURE } from "./constants.js";
 import { rendezvousPathFor } from "./hooks.js";
@@ -103,6 +104,9 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     const pane = {
       state: classify(paneText, deps.agent.rules),
       interrupted: deps.agent.rules.interrupted?.(paneText) ?? false,
+      // Real, non-whitespace content (SGR stripped) — gates the drift canary so a
+      // blank/gone pane is never judged as "all channels blind."
+      nonEmpty: stripSgr(paneText).trim().length > 0,
     };
     return { belief: observer.belief(pane, weInterrupted), paneText };
   };
@@ -157,12 +161,20 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         const { belief } = await readBelief(interruptPending);
         // Project to the public Progress; the extra belief fields (interrupted /
         // edge timings) are wait()'s concern, not progress()'s.
-        const { phase, toolInFlight, transcriptCount, hookChannelHealthy, state } = belief;
+        const {
+          phase,
+          toolInFlight,
+          transcriptCount,
+          hookChannelHealthy,
+          agentChannelHealthy,
+          state,
+        } = belief;
         return {
           phase,
           toolInFlight,
           transcriptCount,
           hookChannelHealthy,
+          agentChannelHealthy,
           state,
         } satisfies Progress;
       }),

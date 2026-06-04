@@ -427,15 +427,19 @@ forever → `wait` still budget-exceeded after the deny. The fused belief now le
 a settled idle pane override that dangling-tool `working` (a real in-flight tool
 never shows the idle box). Both branches verified live on 2.1.162.
 
-**F50 — claude version drift silently breaks parsing. ⚠️**
+**F50 — claude version drift silently breaks parsing. ✅**
 *Hidden:* `isReady` keys off SGR-dim styling; `parseMarker`/`parseTranscriptLine`
 key off claude's payload/record shapes. A claude minor (2.1.161→162 already moved
 the parent chain, the placeholder, the payload) can silently break readiness or
-message reads. *Bites:* the day claude updates. *Standardize:* the agent-seam
-fixtures are the tripwire (a drift fails `npm test`, not a consumer's prod) — keep
-them VERBATIM-from-live and re-capture each claude bump; surface a
-`agentChannelHealthy`-style canary when parsing yields nothing against a non-empty
-pane/transcript.
+message reads. *Standardized (S16):* two tripwires. (1) The agent-seam unit
+fixtures are VERBATIM-from-live, so a parser drift fails `npm test`, not a
+consumer's prod — re-capture each claude bump; `glyph-canary.yml` probes the `❯`
+glyph against *latest* claude on a schedule. (2) A runtime **drift canary**:
+`progress().agentChannelHealthy` goes `false` when EVERY observe channel comes up
+blind at once against a non-empty pane (classifier `unknown` + no hook edges + no
+parsed messages) — the signature of a format moving out from under the parsers.
+A consumer alarms on *persistent* `false`. Unit-tested (the triple-blind fires;
+any single live channel, or an empty pane, keeps it healthy).
 
 ---
 
@@ -459,7 +463,7 @@ pane/transcript.
 | **S13** | ✅ **done** | **Compaction-safe reads:** live-verified the feared chain-break does NOT occur (2.1.162 keeps an unbroken append-only `parentUuid` chain across `/compact`; recall + `messagesSince` hold). Added defense-in-depth: `descendantsOf` classifies lineage and falls back to position for an ORPHANED chain (missing parent), without re-including the late-flush reply. Unit + live. | F43, F25 |
 | **S14** | ✅ **done** | **Paste safety:** `sanitizePasteBody` strips bracketed-paste markers + C0/DEL control bytes (keeps `\n`/`\t`) before `load-buffer`. Closes the ESC[201~ break-out injection. | F48 |
 | S15 | ⬜ | **Re-send safety:** make `budget-exceeded` unmistakably "may still be running — poll, don't re-send". | F44, F45 |
-| S16 | ⬜ | **Drift canary:** surface `agentChannelHealthy` when parsing yields nothing vs a non-empty pane/transcript. | F50 |
+| **S16** | ✅ **done** | **Drift canary:** `progress().agentChannelHealthy` (and on the fused belief) goes `false` when ALL observe channels are blind against a non-empty pane (classifier `unknown` + no hook edges + no messages) — the claude-format-drift signature. Any single live channel keeps it healthy; an empty pane is never judged. Unit-tested. | F50 |
 
 **The keystone landed.** S9 + S1 + S2 + the interrupt-authority fix are implemented
 and verified live — the crash-recovery loop (F19/F20/F21/F28/F30) now holds against

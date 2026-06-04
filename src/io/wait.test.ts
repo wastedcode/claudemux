@@ -219,6 +219,7 @@ describe("waitForOutcome — idle/no-progress budget vs a working turn (S8 / F17
       toolInFlight: true,
       transcriptCount: 3,
       hookChannelHealthy: true,
+      agentChannelHealthy: true,
       state: "unknown",
       interrupted: false,
     };

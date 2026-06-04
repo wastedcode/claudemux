@@ -90,7 +90,10 @@ export class SessionObserver {
    * The one fused {@link Belief}, given the caller's pre-classified pane and the
    * handle's authoritative interrupt flag. Refreshes both channels first.
    */
-  belief(pane: { state: State; interrupted: boolean }, weInterrupted: boolean): Belief {
+  belief(
+    pane: { state: State; interrupted: boolean; nonEmpty?: boolean },
+    weInterrupted: boolean,
+  ): Belief {
     this.#refreshEdges();
     this.#refreshTranscript();
     return believe({

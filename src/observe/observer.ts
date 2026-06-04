@@ -65,7 +65,17 @@ export function deriveProgress(o: {
   const state: Progress["state"] =
     phase === "done" ? "idle" : phase === "unknown" ? "unknown" : "working";
 
-  return { phase, toolInFlight, transcriptCount: o.transcriptCount, hookChannelHealthy, state };
+  // `agentChannelHealthy` is a FUSED (pane-aware) judgment — `believe()` computes
+  // the real value; from hooks/transcript alone there is no drift evidence, so the
+  // base is `true`. (deriveProgress is hook-only; the canary needs the pane.)
+  return {
+    phase,
+    toolInFlight,
+    transcriptCount: o.transcriptCount,
+    hookChannelHealthy,
+    agentChannelHealthy: true,
+    state,
+  };
 }
 
 /**
@@ -115,7 +125,13 @@ export function currentLifeEdges(edges: readonly HookEdge[]): readonly HookEdge[
 export function believe(o: {
   edges: readonly HookEdge[];
   transcriptCount: number;
-  pane: { state: State; interrupted: boolean };
+  /**
+   * The pre-classified pane. `nonEmpty` (does the captured frame carry any real,
+   * non-whitespace content) feeds the {@link Belief.agentChannelHealthy} drift
+   * canary — we only judge "all channels blind" against a pane that actually has
+   * content. Optional: absent ⇒ treated as empty (no drift judgment).
+   */
+  pane: { state: State; interrupted: boolean; nonEmpty?: boolean };
   /**
    * Authoritative "this handle issued an interrupt not yet superseded by a send."
    * An interrupt fires NO `stop` edge AND leaves the spinner's `esc to interrupt`
@@ -153,10 +169,20 @@ export function believe(o: {
   }
   const lastStop = [...edges].reverse().find((e) => e.event === "stop");
   const lastEdge = edges[edges.length - 1];
+  // Drift canary: against a non-empty pane, at least ONE channel must extract
+  // signal — a recognized pane state, a known interrupt, hook edges, or a parsed
+  // message. All blind at once ⇒ the agent's output format likely drifted.
+  const recognizedSomething =
+    o.pane.state !== "unknown" ||
+    interrupted ||
+    prog.hookChannelHealthy ||
+    prog.transcriptCount > 0;
+  const agentChannelHealthy = o.pane.nonEmpty !== true || recognizedSomething;
   return {
     ...prog,
     state,
     interrupted,
+    agentChannelHealthy,
     ...(lastStop === undefined ? {} : { lastStopAt: lastStop.at }),
     ...(lastEdge === undefined ? {} : { lastActivityAt: lastEdge.at }),
   };

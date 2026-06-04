@@ -185,6 +185,52 @@ describe("believe — the one fused belief (state()/progress()/wait() defer to i
   });
 });
 
+describe("believe — agentChannelHealthy drift canary (S16/F50)", () => {
+  it("UNHEALTHY only when ALL channels are blind against a non-empty pane", () => {
+    // Pane has content but classifies `unknown`, no hook edges, no messages → the
+    // triple-blind drift signature.
+    const b = believe({
+      edges: [],
+      transcriptCount: 0,
+      pane: { state: "unknown", interrupted: false, nonEmpty: true },
+    });
+    expect(b.agentChannelHealthy).toBe(false);
+  });
+
+  it("a recognized pane state keeps it healthy (the classifier read something)", () => {
+    const b = believe({
+      edges: [],
+      transcriptCount: 0,
+      pane: { state: "idle", interrupted: false, nonEmpty: true },
+    });
+    expect(b.agentChannelHealthy).toBe(true);
+  });
+
+  it("any single live channel keeps it healthy — a hook edge, or parsed messages", () => {
+    const viaHook = believe({
+      edges: [edge("session-start", 1)],
+      transcriptCount: 0,
+      pane: { state: "unknown", interrupted: false, nonEmpty: true },
+    });
+    expect(viaHook.agentChannelHealthy).toBe(true);
+    const viaTranscript = believe({
+      edges: [],
+      transcriptCount: 5,
+      pane: { state: "unknown", interrupted: false, nonEmpty: true },
+    });
+    expect(viaTranscript.agentChannelHealthy).toBe(true);
+  });
+
+  it("an EMPTY/blank pane is never judged drifted (no content to be blind to)", () => {
+    const b = believe({
+      edges: [],
+      transcriptCount: 0,
+      pane: { state: "unknown", interrupted: false, nonEmpty: false },
+    });
+    expect(b.agentChannelHealthy).toBe(true);
+  });
+});
+
 describe("readHookEdges (the boot-ready signal source)", () => {
   it("returns the session-start edge chronologically; absent file → empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "cmux-edges-"));
