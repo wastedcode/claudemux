@@ -105,10 +105,11 @@ when the agent's `queued` pane affordance is present: "accepted, will run, don't
 re-send." Verified live on 2.1.162 (`scripts/flows-send-while-busy.mjs`): a send
 into a working session returns `DELIVERED_QUEUED` and the queued turn then runs.
 
-**F13 — Empty / whitespace send. ⚠️**
-*Expected:* define — claudemux delivers it; claude ignores an empty submit. Note
-in the `send` contract that an empty body is a no-op turn (cursor anchoring will
-fall back to a count). *Standardize doc.*
+**F13 — Empty / whitespace send. ✅**
+*Standardized:* documented in the `send()` contract — an empty/whitespace body is
+delivered but a no-op turn (the agent ignores an empty submit), so no record is
+written and the return is `DELIVERY_UNCONFIRMED` (nothing to anchor). The consumer
+guards against empty sends if a no-op turn would confuse its loop.
 
 ---
 
@@ -183,18 +184,23 @@ session-meta → transcript + hooks locatable → resume tailing. It does NOT re
 or re-kick (the agent kept its context). (Posse reads `emitted =
 transcript.length` so old items aren't re-folded.)
 
-**F22 — Daemon restart, pane DIED. ✅/⚠️**
-*Expected:* `adopt` throws `SessionGone` (pane not alive). The consumer then
-`resume`s into a fresh pane from the persisted id (F20's recovery). *Standardize:*
-document the `adopt`-fails-then-`resume` recipe as the canonical restart path.
+**F22 — Daemon restart, pane DIED. ✅**
+*Standardized:* `adopt` throws `SessionGone` when the pane isn't alive; the consumer
+then `resume`s into a fresh pane from the persisted id. The `adopt`-fails-then-
+`resume` restart path is documented (README "Resume vs adopt vs fork") and shown
+end-to-end in `examples/adopt-after-restart.ts`; the crash→resume mechanics are
+live-verified in `scripts/flows-recovery.mjs`.
 
-**F23 — Re-hydration: don't re-kick, DO re-send the in-flight prompt. ❌**
+**F23 — Re-hydration: don't re-kick, DO re-send the in-flight prompt. ✅**
 *Journey:* Posse's exact rule — on a crash-revive, don't re-send the kickoff (the
 agent has context); only re-send what was in flight.
-*Expected:* claudemux gives a first-class way to ask "did my last turn (cursor)
-complete?" so the consumer's re-send decision isn't a hand-rolled transcript
-scan. *Work item:* a `turnComplete(cursor): boolean` (or `messagesSince` semantics
-documented as the detector) + the standardized recipe.
+*Standardized:* `turnComplete(cursor): boolean` is the first-class detector —
+`false` ⇒ that turn was lost (re-send it), `true` ⇒ it completed (leave it). The
+consumer applies it per-cursor: the kickoff cursor reads `true` (don't re-kick),
+the in-flight cursor reads `false` (re-send). Recipe in README §"Resuming a
+conversation after a crash"; live-verified in `scripts/flows-recovery.mjs` (the
+dangling-turn ⇒ `turnComplete === false` case). The "don't re-kick" decision is
+consumer policy applied over this substrate primitive.
 
 **F24 — Resume an id that is STILL live elsewhere. ✅**
 *Expected:* the agent refuses (two panes, one conversation) → `AgentExitedDuringBoot`.
@@ -236,12 +242,14 @@ fully readable branch.
 `state()` reads `unknown` (claude restores the cut draft into the composer — not a
 clean idle). The session stays responsive.
 
-**F29 — Interrupt then send a replacement (the draft footgun). ⚠️**
+**F29 — Interrupt then send a replacement (the draft footgun). ✅ (documented)**
 *Journey:* interrupt, then send a corrected prompt.
-*Expected:* a naive `send` pastes ONTO the restored draft and submits the
-concatenation. The consumer must clear the composer first — a claude-specific
-"interrupt-and-replace" recipe (README), deliberately not folded into the neutral
-verb. *Standardize:* keep documented; consider an opt-in `clearComposer` helper.
+*Standardized:* a naive `send` pastes ONTO the restored draft and submits the
+concatenation — documented, with the claude-specific "interrupt-and-replace"
+recipe (clear the composer by observing it empty, then send) in README
+"Interrupting a working agent." Deliberately NOT folded into the neutral verb
+(mechanism, not policy — same reason `interrupt()` bundles no follow-up). An opt-in
+`clearComposer` helper is a possible future convenience, not a correctness gap.
 
 **F30 — Interrupt when idle / stale "Interrupted" in scrollback. ✅**
 *Journey:* interrupt fired on an idle session, or a *new* turn runs while a prior
@@ -361,7 +369,7 @@ already excludes `beforeIds`, but a same-text record from much earlier in the sa
 session can still collide) — prefer position/recency + the before-set, and document
 the dup-prompt caveat.
 
-**F42 — Cross-host clock skew breaks the done-trigger. ⚠️**
+**F42 — Cross-host clock skew breaks the done-trigger. ⚠️ (documented single-host assumption)**
 *Hidden:* `wait`'s completion uses `lastStopAt >= waitStart`, comparing the hook's
 `date +%s.%N` (the session host's clock) against the consumer's `Date.now()`. On a
 different host/container with clock skew, a real `stop` can read as "before" the
@@ -403,20 +411,22 @@ likely wedged, `interrupt()` not re-send) and to re-send only a `turnComplete ==
 false` turn. (Also: the library now owns no default budget — `budget-exceeded`
 only happens against a bound the consumer chose. F31/F32.)
 
-**F46 — Post-restart cursor with a recovery miss → silent empty. ⚠️**
+**F46 — Post-restart cursor with a recovery miss → silent empty. ✅ (documented distinguisher)**
 *Hidden:* a cursor (uuid) is durable across the consumer's restart, BUT if `adopt`
-couldn't recover the `agentSessionId` (session-meta was never written — e.g.
-`hooks:false` create, or a non-claudemux session), the transcript is unlocatable →
-`messagesSince(validCursor)` returns `[]`. *Bites:* the consumer has a perfectly
-good cursor and gets nothing, with no error. *Standardize:* `messagesSince` (and
-reads) should signal "transcript not locatable" distinctly from "no new messages."
+couldn't recover the `agentSessionId` (session-meta never written — `hooks:false`
+create, or a non-claudemux session), the transcript is unlocatable →
+`messagesSince(validCursor)` returns `[]`, identical to "no new messages."
+*Standardized:* the `messagesSince`/`turnComplete` docstrings now state the
+disambiguator explicitly — gate on `agentSessionId !== undefined` first: `undefined`
+⇒ reads are blind (can't locate the transcript), not "nothing new." A distinct
+typed signal would be cleaner, but the documented gate closes the silent-bite.
 
-**F47 — `kill()` mid-turn discards the in-flight reply. ⚠️**
+**F47 — `kill()` mid-turn discards the in-flight reply. ✅ (documented)**
 *Hidden:* `kill` is immediate; an assistant turn mid-stream is lost (transcript
-has a dangling prompt, same shape as a crash). *Bites:* a consumer kills to "stop"
-a session and loses an answer it could have read first. *Standardize:* document
-that `kill` is a hard stop (use `interrupt` + read to stop-and-keep); consider a
-`drain` option.
+has a dangling prompt, same shape as a crash). *Standardized:* the `kill()`
+docstring now states it is a **hard stop, not a drain** — to stop a turn but keep
+what it produced, `interrupt()`/`wait()` and read with `messagesSince` first, then
+`kill()`. A `drain` option is a possible future convenience, not a correctness gap.
 
 **F48 — Pasting content with control/escape sequences. ✅ (S14)**
 *Hidden:* `send` pastes the body via bracketed paste. A prompt containing the

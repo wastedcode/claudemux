@@ -93,6 +93,14 @@ export async function waitForOutcome(
     }
 
     // ── completion: a hook done-edge OR an armed pane-idle, confirmed settled ─
+    // KNOWN LIMITATION (F42, single-host assumption): `lastStopAt` is the hook's
+    // own clock (`date +%s.%N` on the SESSION's host); `start` is the consumer's
+    // `Date.now()`. They agree only on one host / one clock. Under cross-host
+    // clock skew (a distributed deployment driving a remote agent), a real `stop`
+    // can read as before/after this wait → completion mis-fires; the pane-idle arm
+    // path still recovers it, but the reliable hook trigger is degraded. The fix
+    // is to baseline the stop-edge ORDER/count at wait-start instead of comparing
+    // wall-clocks (the S9 pattern); deferred until a distributed consumer needs it.
     const hookDone = belief.lastStopAt !== undefined && belief.lastStopAt >= start;
     if (belief.state !== "idle") armed = true;
     else if (baseline !== undefined && paneFingerprint(paneText) !== baseline) armed = true;

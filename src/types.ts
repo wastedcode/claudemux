@@ -238,6 +238,11 @@ export interface SessionHandle {
    *     queued turn run, then read with a fresh cursor.
    *   - `DELIVERY_UNCONFIRMED` — no evidence the message landed (a lost Enter, a
    *     boot-race drop); safe to re-send.
+   *
+   * An **empty or whitespace-only** `text` is delivered but is a no-op turn —
+   * the agent ignores an empty submit, so no user record is written and the
+   * return is `DELIVERY_UNCONFIRMED` (there was nothing to anchor). Guard against
+   * empty sends in your own code if a no-op turn would confuse your loop.
    */
   send(text: string): Promise<Cursor>;
 
@@ -248,6 +253,12 @@ export interface SessionHandle {
    * recoverable {@link agentSessionId}) OR the cursor can't be resolved (the
    * `DELIVERY_UNCONFIRMED` sentinel, a stale/garbage value) — an unresolvable
    * cursor never returns the whole transcript.
+   *
+   * **Empty is ambiguous on purpose — disambiguate with {@link agentSessionId}.**
+   * A perfectly good cursor can read `[]` simply because the transcript is
+   * unlocatable (no recoverable id), which looks identical to "no new messages."
+   * If that distinction matters, gate on `agentSessionId !== undefined` first:
+   * `undefined` ⇒ reads are blind (can't locate the transcript), not "nothing new."
    */
   messagesSince(cursor: Cursor): Promise<Message[]>;
 
@@ -353,7 +364,14 @@ export interface SessionHandle {
    */
   capture(opts?: { ansi?: boolean; lines?: number }): Promise<string>;
 
-  /** Kill exactly this session. Idempotent. */
+  /**
+   * Kill exactly this session. Idempotent (killing a gone session is success).
+   *
+   * **A hard stop, not a drain.** If a turn is in flight, its mid-stream reply is
+   * lost — the transcript keeps a dangling prompt (the same shape a crash leaves).
+   * To stop a turn but *keep* what it produced, `interrupt()` (or `wait()`) and
+   * read with `messagesSince` first, then `kill()`.
+   */
   kill(): Promise<void>;
 
   /**
