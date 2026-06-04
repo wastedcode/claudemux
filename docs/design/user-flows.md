@@ -199,12 +199,15 @@ documented as the detector) + the standardized recipe.
 *Expected:* the agent refuses (two panes, one conversation) → `AgentExitedDuringBoot`.
 The consumer should `adopt` the live pane instead of `resume`. (Same guard as F6.)
 
-**F25 — Resume after auto-compaction. ⚠️**
-*Journey:* a very long build conversation auto-compacted; daemon resumes it.
-*Expected:* the transcript is append-only (compaction summarizes the *context
-window*, never rewrites the log), so `resume` + history recall still works.
-*Standardize:* live-verify recall across a compaction boundary (a known-fragile
-claude behavior).
+**F25 — Resume after compaction. ✅**
+*Journey:* a long build conversation compacted; daemon resumes it.
+*Verified (S13):* live against claude 2.1.162 — after a `/compact` boundary, a
+follow-up turn correctly recalls the pre-compaction secret, and `messagesSince`
+on a pre-compaction cursor still returns the post-compaction turn. The transcript
+is append-only as claimed (compaction summarizes the *context window*; the on-disk
+`.jsonl` keeps an unbroken linear `parentUuid` chain), so `resume` + history recall
+hold. (`/compact` is the manual proxy for auto-compaction; the on-disk record model
+is the same.)
 
 **F26 — Bare `--resume` (id we can't know up front). ✅**
 *Expected:* `agentSessionId` surfaces as `undefined` honestly (the one path we
@@ -360,13 +363,18 @@ wait → hooks never fire completion (falls to pane), or a stale stop reads as
 clocks (a distributed Posse). *Standardize:* derive "this turn" from edge ORDERING
 (a `stop` after our `prompt-submit`), not wall-clock comparison.
 
-**F43 — Mid-turn auto-compaction snaps the parent chain. ❌**
-*Hidden:* if claude auto-compacts WHILE a turn is in flight, later records'
-`parentUuid` can reference summarized-away records. `descendantsOf` walks a chain
-that no longer connects → `messagesSince` returns `[]` or a partial. *Bites:* long
-conversations, rarely, unreproducibly. *Standardize:* a positional fallback when
-the causal walk yields nothing but the transcript clearly grew; live-verify across
-a compaction.
+**F43 — Compaction snaps the parent chain. ✅ (feared break did NOT reproduce)**
+*Was hidden:* the worry that compaction leaves later records' `parentUuid`
+referencing summarized-away records, so `descendantsOf` walks a broken chain and
+`messagesSince` drops the tail. *Verified (S13):* on claude 2.1.162 the chain does
+NOT break — the on-disk transcript is append-only and the linear `parentUuid` chain
+stays intact across a `/compact` boundary (the summarized records remain on disk),
+so a post-compaction turn still descends from a pre-compaction cursor. *Hardened
+anyway (defense-in-depth):* `descendantsOf` now classifies each lineage and, if a
+chain hits a MISSING parent (a hole, e.g. a future record-format change that *did*
+drop a record), falls back to position for the post-cursor tail — provably without
+re-including the late-flush prior reply (which roots cleanly, never orphaned).
+Unit-tested (orphan tail kept; late-flush still excluded) + live-verified.
 
 **F44 — Interrupt-after-done is a silent no-op. ⚠️**
 *Hidden:* out-of-process latency lets a turn FINISH between the consumer deciding
@@ -448,7 +456,7 @@ pane/transcript.
 | **S10** | ✅ **done** | **Bounded reads:** a per-handle `SessionObserver` with incremental `TailReader`s — each `state`/`progress`/`wait`/`messagesSince` poll parses only newly-appended bytes (O(delta), not O(file)). The whole read path (handle + wait) was restructured to defer to it; the old full-read observer functions removed. | F39 |
 | **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
 | **S12** | ✅ **done** | **Dup-prompt anchoring** — already correct: `anchorOwnTurn` iterates newest-first and excludes the pre-send id-set, so a duplicate prompt anchors the NEW record. | F41 |
-| S13 | ⬜ | **Compaction-safe reads:** positional fallback when the causal walk yields nothing but the transcript grew. | F43, F25 |
+| **S13** | ✅ **done** | **Compaction-safe reads:** live-verified the feared chain-break does NOT occur (2.1.162 keeps an unbroken append-only `parentUuid` chain across `/compact`; recall + `messagesSince` hold). Added defense-in-depth: `descendantsOf` classifies lineage and falls back to position for an ORPHANED chain (missing parent), without re-including the late-flush reply. Unit + live. | F43, F25 |
 | **S14** | ✅ **done** | **Paste safety:** `sanitizePasteBody` strips bracketed-paste markers + C0/DEL control bytes (keeps `\n`/`\t`) before `load-buffer`. Closes the ESC[201~ break-out injection. | F48 |
 | S15 | ⬜ | **Re-send safety:** make `budget-exceeded` unmistakably "may still be running — poll, don't re-send". | F44, F45 |
 | S16 | ⬜ | **Drift canary:** surface `agentChannelHealthy` when parsing yields nothing vs a non-empty pane/transcript. | F50 |

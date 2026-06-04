@@ -231,6 +231,18 @@ function messagesSince(observer: SessionObserver, cursor: string): Message[] {
  * excluded even if it lands after our record in the append-only file. Records
  * with no parent chain (e.g. an agent that omits `parentId`) fall back to a
  * positional slice so a thread-less transcript still works.
+ *
+ * **Compaction-safe.** Verified empirically on claude 2.1.162: a compaction
+ * (`/compact` or auto) summarizes the *context window* but leaves the on-disk
+ * transcript append-only with an UNBROKEN linear `parentUuid` chain, so a
+ * post-compaction turn still descends from a pre-compaction cursor — no special
+ * handling needed for the observed case. As defense-in-depth against a future
+ * record-format change (or a partial flush) that *did* drop an intermediate
+ * record, a message whose chain hits a MISSING parent (orphaned, not a clean
+ * root) and that sits positionally after the cursor is still included — we can't
+ * prove causality through a hole, so we fall back to position. This cannot
+ * re-include the late-flush prior reply: its parent record IS present (it roots
+ * cleanly at an earlier turn), so it's never an orphan. (F43/F25.)
  */
 function descendantsOf(
   all: readonly Message[],
@@ -243,21 +255,28 @@ function descendantsOf(
   const parentOf =
     fullParentOf.size > 0 ? fullParentOf : new Map(all.map((m) => [m.id, m.parentId]));
   const hasLinks = [...parentOf.values()].some((p) => p !== undefined);
-  if (!hasLinks) {
-    const idx = all.findIndex((m) => m.id === ancestorId);
-    return idx >= 0 ? all.slice(idx + 1) : all.slice();
-  }
-  const descends = (id: string): boolean => {
+  const anchorIdx = all.findIndex((m) => m.id === ancestorId);
+  if (!hasLinks) return anchorIdx >= 0 ? all.slice(anchorIdx + 1) : all.slice();
+  // Classify a message's lineage relative to the cursor by walking its parent
+  // chain: reaches the cursor → `descends`; hits a referenced-but-absent parent
+  // → `orphan` (a hole, e.g. a dropped record); reaches a clean root (no parent)
+  // → `rooted` (a different lineage — an earlier turn).
+  const lineage = (id: string): "descends" | "orphan" | "rooted" => {
     const seen = new Set<string>();
     let cur = parentOf.get(id);
-    while (cur !== undefined && !seen.has(cur)) {
-      if (cur === ancestorId) return true;
+    while (cur !== undefined) {
+      if (cur === ancestorId) return "descends";
+      if (seen.has(cur)) return "rooted"; // cycle guard
       seen.add(cur);
+      if (!parentOf.has(cur)) return "orphan"; // parent referenced but its record is gone
       cur = parentOf.get(cur);
     }
-    return false;
+    return "rooted";
   };
-  return all.filter((m) => descends(m.id));
+  return all.filter((m, i) => {
+    const l = lineage(m.id);
+    return l === "descends" || (l === "orphan" && anchorIdx >= 0 && i > anchorIdx);
+  });
 }
 
 const ANCHOR_POLLS = 12;

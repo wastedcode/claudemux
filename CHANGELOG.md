@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compaction-safe `messagesSince` (defense-in-depth).** Verified live that a
+  compaction boundary does *not* break the transcript's `parentUuid` chain on
+  claude 2.1.162 (it stays append-only, so a post-compaction turn still descends
+  from a pre-compaction cursor — `messagesSince`/recall hold). `descendantsOf` now
+  also classifies each message's lineage and, should a future record-format change
+  ever drop an intermediate record, falls back to file position for the
+  **orphaned** post-cursor tail — provably without re-including the prior turn's
+  late-flushed reply (which roots cleanly and is never an orphan). No behavior
+  change on current claude.
 - **Denied tool no longer wedges `wait()` at `budget-exceeded`.** A tool the
   consumer *denies* fires `PreToolUse` (a `tool-start` hook edge) but never
   `PostToolUse` — so the hook-derived belief was stuck at `phase=tool`/`working`

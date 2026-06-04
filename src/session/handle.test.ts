@@ -115,6 +115,38 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
     expect((await handle().messagesSince("delivery-unconfirmed")).length).toBe(0);
   });
 
+  it("compaction defense: an orphaned chain (parent record dropped) still includes the post-cursor tail (S13/F43)", async () => {
+    // On real claude the chain stays intact across a compaction (verified live).
+    // This guards the hypothetical where an intermediate record is GONE: u2's
+    // parent points at a summarized-away id, so the chain from u2 can't reach u1.
+    // u2/a2 sit AFTER u1 in the file, so they must still be returned (we can't
+    // prove causality through the hole → fall back to position).
+    writeFileSync(
+      tx,
+      `${[
+        userRec("u1", null, "ONE"),
+        asstRec("a1", "u1", "reply ONE"),
+        userRec("u2", "GONE-summarized", "POSTCOMPACT"), // parent record not in the file
+        asstRec("a2", "u2", "reply POST"),
+      ].join("\n")}\n`,
+    );
+    expect(txt(await handle().messagesSince("u1"))).toContain("reply POST"); // orphan tail kept
+    expect(txt(await handle().messagesSince("u2"))).toBe("reply POST"); // cursor on the orphan works
+
+    // And the late-flush reply (clean root BEFORE the cursor) is still excluded —
+    // it is NOT an orphan, so position never leaks it in.
+    writeFileSync(
+      tx,
+      `${[
+        userRec("u1", null, "ONE"),
+        userRec("u2", "a1", "TWO"),
+        asstRec("a1", "u1", "reply ONE"), // flushed late, lands after u2
+        asstRec("a2", "u2", "reply TWO"),
+      ].join("\n")}\n`,
+    );
+    expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO"); // a1 still excluded
+  });
+
   it("turnComplete: true when a reply descends from the cursor, false for a DANGLING turn (S2/F20)", async () => {
     // A completed turn: user → assistant.
     writeFileSync(tx, `${[userRec("u1", null, "ASK"), asstRec("a1", "u1", "REPLY")].join("\n")}\n`);
