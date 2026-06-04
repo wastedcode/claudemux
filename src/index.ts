@@ -27,10 +27,14 @@ export {
   WorkspaceUntrusted,
 } from "./errors.js";
 
+export { ask } from "./compose.js";
+export type { AskResult } from "./compose.js";
 export { adopt } from "./session/adopt.js";
 export type { AdoptOptions } from "./session/adopt.js";
 export { create } from "./session/create.js";
 export { exists, kill, list } from "./session/registry.js";
+export { resume } from "./session/resume.js";
+export type { ResumeOptions } from "./session/resume.js";
 
 export type {
   BackendCommandEvent,
@@ -42,4 +46,5 @@ export type {
   ReadyOpts,
   SessionHandle,
   State,
+  TurnOutcome,
 } from "./types.js";

@@ -11,6 +11,11 @@ import { create } from "../../src/session/create.js";
  * letting us assert what `create()` mints, threads, surfaces, and caches
  * without spawning a real agent. (The on-box round-trip lives in
  * `agent-session-id.live.test.ts`.)
+ *
+ * These pass `hooks: false` so boot settles on the ready *pane* alone: with
+ * hooks on, boot also gates on the agent's `SessionStart` rendezvous edge,
+ * which only a real agent writes (covered by the live suite + `boot.test.ts`).
+ * Identity (argv mint/inject/surface) is orthogonal to the hook channel.
  */
 
 /** A claude-shaped ready pane: the empty `❯` input box with the footer below. */
@@ -80,7 +85,13 @@ const FAST_BOOT = 5_000;
 describe("create() — mint + inject + surface agentSessionId (ticket A)", () => {
   it("mints a v4 UUID, injects --session-id <id> as two adjacent argv elements, surfaces it", async () => {
     const backend = new RecordingBackend();
-    const s = await create({ name: "mint", cwd: "/tmp", backend, bootTimeoutMs: FAST_BOOT });
+    const s = await create({
+      name: "mint",
+      cwd: "/tmp",
+      backend,
+      bootTimeoutMs: FAST_BOOT,
+      hooks: false,
+    });
 
     expect(s.agentSessionId).toMatch(V4);
     const argv = backend.spawned?.argv ?? [];
@@ -93,7 +104,13 @@ describe("create() — mint + inject + surface agentSessionId (ticket A)", () =>
 
   it("caches the surfaced id under the recoverable session-meta key", async () => {
     const backend = new RecordingBackend();
-    const s = await create({ name: "cache", cwd: "/tmp", backend, bootTimeoutMs: FAST_BOOT });
+    const s = await create({
+      name: "cache",
+      cwd: "/tmp",
+      backend,
+      bootTimeoutMs: FAST_BOOT,
+      hooks: false,
+    });
     expect(backend.meta.get("agent-session-id")).toBe(s.agentSessionId);
   });
 
@@ -119,6 +136,7 @@ describe("create() — mint + inject + surface agentSessionId (ticket A)", () =>
       backend,
       agent: stub,
       bootTimeoutMs: FAST_BOOT,
+      hooks: false,
     });
     expect(s.agentSessionId).toBe(SENTINEL);
     expect(backend.meta.get("agent-session-id")).toBe(SENTINEL);
@@ -126,7 +144,13 @@ describe("create() — mint + inject + surface agentSessionId (ticket A)", () =>
 
   it("a failing setSessionMeta does NOT fail create() (best-effort cache, id still on the handle)", async () => {
     const backend = new RecordingBackend(/* metaFailure */ true);
-    const s = await create({ name: "besteffort", cwd: "/tmp", backend, bootTimeoutMs: FAST_BOOT });
+    const s = await create({
+      name: "besteffort",
+      cwd: "/tmp",
+      backend,
+      bootTimeoutMs: FAST_BOOT,
+      hooks: false,
+    });
     expect(s.agentSessionId).toMatch(V4); // id is on the handle from the mint
     expect(backend.killed).toBe(0); // create did not tear down
   });
@@ -141,6 +165,7 @@ describe("create({ agentSessionId }) — caller-chosen id (ticket B)", () => {
       backend,
       agentSessionId: CALLER_UUID,
       bootTimeoutMs: FAST_BOOT,
+      hooks: false,
     });
     expect(s.agentSessionId).toBe(CALLER_UUID);
     const argv = backend.spawned?.argv ?? [];
@@ -200,6 +225,7 @@ describe("create() — the one unknowable path: bare --resume (claude picks the 
       backend,
       extraArgs: ["--resume"],
       bootTimeoutMs: FAST_BOOT,
+      hooks: false,
     });
     expect(s.agentSessionId).toBeUndefined();
     expect(backend.meta.has("agent-session-id")).toBe(false); // nothing to cache

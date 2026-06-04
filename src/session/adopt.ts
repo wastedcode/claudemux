@@ -51,7 +51,8 @@ export interface AdoptOptions {
  *   await session.state(); // ALWAYS call state() before driving the pane
  * } catch (err) {
  *   if (err instanceof SessionGone) {
- *     // process exited — re-create with `--resume <agentSessionId>`
+ *     // the pane is gone — continue the conversation in a fresh one:
+ *     // await resume({ name: "job-2", cwd, agentSessionId });
  *   }
  * }
  * ```
