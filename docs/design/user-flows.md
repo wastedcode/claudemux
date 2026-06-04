@@ -58,13 +58,14 @@ consumer should `adopt` the live one instead.
 *Expected:* the theme dialog is auto-dismissed (Enter); boot continues. Dialogs
 are always handled before any ready check.
 
-**F8 — Boot under contention (N parallel spawns). ⚠️**
+**F8 — Boot under contention (N parallel spawns). ✅**
 *Journey:* daemon spawns a fleet at once; the box is busy.
 *Expected:* each session boots independently or fails with an honest
-`ReplTimeout` — never crosstalk, never a false-ready. *Standardize:* claudemux
-exposes no spawn-concurrency limiter; Posse serialized boot behind a semaphore.
-Document that boot concurrency is the consumer's policy (claudemux reports
-per-session readiness; it does not throttle).
+`ReplTimeout` — never crosstalk, never a false-ready. *Standardized (S7):*
+documented (README "Boot concurrency is yours") that claudemux exposes no
+spawn-throttle — it reports per-session readiness honestly but does not throttle;
+serializing/semaphoring N concurrent `create()`s is the consumer's policy
+(mechanism, not policy — same north star as patience).
 
 ---
 
@@ -213,11 +214,17 @@ is the same.)
 *Expected:* `agentSessionId` surfaces as `undefined` honestly (the one path we
 can't know it); transcript-dependent reads degrade rather than fabricate.
 
-**F27 — Fork a conversation. ⚠️**
+**F27 — Fork a conversation. ✅ (recipe + honest caveats)**
 *Journey:* daemon wants to branch an exploration from a build agent's history.
-*Expected:* `--fork-session` resumes into a NEW id; both continue independently;
-the new id is unknowable up front (`agentSessionId` undefined). *Standardize:*
-either a first-class `fork()` peer or a documented `extraArgs` recipe.
+*Verified (S6):* `create({ extraArgs: ["--resume", id, "--fork-session"] })` branches
+into a NEW conversation; both continue independently; the new id is unknowable up
+front (`agentSessionId` undefined — confirmed live). *Documented limitation:*
+because the fork's id is unknowable, claudemux locates its transcript only via the
+first hook edge, so the **first `send()` can return `DELIVERY_UNCONFIRMED`** (no
+anchor before the path resolves) and `messagesSince`/`turnComplete` are unavailable
+until then. No first-class `fork()` peer — it's a documented `extraArgs` recipe
+with these caveats (README "Resume vs adopt vs fork"); prefer `resume()` for a
+fully readable branch.
 
 ---
 
@@ -376,23 +383,25 @@ drop a record), falls back to position for the post-cursor tail — provably wit
 re-including the late-flush prior reply (which roots cleanly, never orphaned).
 Unit-tested (orphan tail kept; late-flush still excluded) + live-verified.
 
-**F44 — Interrupt-after-done is a silent no-op. ⚠️**
+**F44 — Interrupt-after-done is a silent no-op. ✅ (documented hazard)**
 *Hidden:* out-of-process latency lets a turn FINISH between the consumer deciding
 to interrupt and the ESC landing (the scar in `[[interrupt-verify-working-state-immediately]]`).
-ESC then just clears the idle box; the turn already `completed`. *Bites:* the
-consumer believes it aborted, but the reply landed (or a `send` next pastes onto a
-cleared box). *Standardize:* `interrupt()` returns whether a turn was actually in
-flight (or the consumer checks `state()` in the same tight sequence) — already a
-documented hazard; make it a returned signal.
+ESC then just clears the idle box; the turn already `completed`. *Standardized:*
+documented (README "Interrupting a working agent" — the gate is not atomic; gate
+on `state()` in one tight in-process sequence, and don't trust a stale prior-process
+`working` reading). A harmless no-op, not corruption; surfacing it as a returned
+signal is deferred (the documented gate covers the consumer's need).
 
-**F45 — A legit turn longer than the wait budget looks like a failure. ⚠️**
-*Hidden:* `wait` defaults to 5 min. A big build turn legitimately exceeds it →
-`budget-exceeded{max}`. A naive consumer treats that as failure and **re-sends** →
-two concurrent turns / interleaved work / duplicated side effects. *Bites:* the
-worst kind — duplicated *actions*, not just reads. *Standardize:* the docs must
-make `budget-exceeded` unmistakably "still maybe running, do NOT re-send blindly —
-poll again"; pair with progress (`toolInFlight`/recent activity) so the consumer
-distinguishes slow-but-alive from wedged.
+**F45 — A legit turn longer than the wait budget looks like a failure. ✅**
+*Hidden:* a big build turn legitimately exceeds the consumer's `maxMs` →
+`budget-exceeded{max}`. A naive consumer treats it as failure and **re-sends** →
+two concurrent turns / duplicated *side effects* (the worst kind). *Standardized
+(S15):* README makes `budget-exceeded` unmistakably "may still be running — do NOT
+blindly re-send"; it routes the consumer to `progress()` (`toolInFlight` / a
+freshly-advancing `transcriptCount` ⇒ slow-but-alive, keep waiting; long-flat ⇒
+likely wedged, `interrupt()` not re-send) and to re-send only a `turnComplete ===
+false` turn. (Also: the library now owns no default budget — `budget-exceeded`
+only happens against a bound the consumer chose. F31/F32.)
 
 **F46 — Post-restart cursor with a recovery miss → silent empty. ⚠️**
 *Hidden:* a cursor (uuid) is durable across the consumer's restart, BUT if `adopt`
@@ -454,15 +463,15 @@ any single live channel, or an empty pane, keeps it healthy).
 | **S3** | ✅ **done** | **Delivery confirmation:** delivered-vs-queued-vs-unconfirmed surfaced via id-cursor / `DELIVERED_QUEUED` / `DELIVERY_UNCONFIRMED` (never a count, S11+S4); and `send` OWNS the lost-Enter retry — `submitOnce` re-fires Enter once (never re-pastes) then re-anchors before reporting unconfirmed. Unit-tested (dropped-first-Enter backend). | F10, F12 |
 | **S4** | ✅ **done** | **Send-while-busy:** `send` returns the distinct `DELIVERED_QUEUED` sentinel (vs `DELIVERY_UNCONFIRMED`) when a busy session queued the message — "accepted, will run, don't re-send." Agent owns the `queued` pane affordance (`ClassifierRules.queued`, mirroring `interrupted`); the send path composes it. Unit + live (`scripts/flows-send-while-busy.mjs`). | F12 |
 | **S5** | ✅ **done** | **Permission-prompt `awaiting` + `respond()`:** header+menu classifier, `respond("approve"\|"approve-for-session"\|"deny")` (handle + `claudemux respond` CLI), self-confirming so `respond→wait` is race-free. Also fixed the denied-tool dangling-`tool-start` that kept `wait` at `budget-exceeded`. Live-verified on 2.1.162 (approve + deny) via `scripts/flows-permission-prompt.mjs`. | F33, F49 |
-| S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |
-| S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
+| **S6** | ✅ **done** | **Resume recipes:** README "Resume vs adopt vs fork" documents adopt (live pane) / resume (dead pane, same id) / fork (`--fork-session` recipe). Live-verified: resume recall (surface-library), compaction-resume (S13), fork branches into an unknowable id (with the documented read/anchor caveat). | F22, F25, F27 |
+| **S7** | ✅ **done** | **Boot-concurrency policy:** documented (README "Boot concurrency is yours") — no spawn-throttle; per-session readiness is honest; serializing N boots is the consumer's policy. | F8 |
 | **S8** | ✅ **done** | **Long-think non-stuck:** the stuck early-exit is gated on `unknown && !toolInFlight`; a `working` pane / tool-in-flight is never early-aborted, and the spinner-animated fingerprint keeps the heartbeat alive. Unit-tested (injectable `stuckMs`) + live scenario E (~45s working turn → completed). | F17 |
 | **S10** | ✅ **done** | **Bounded reads:** a per-handle `SessionObserver` with incremental `TailReader`s — each `state`/`progress`/`wait`/`messagesSince` poll parses only newly-appended bytes (O(delta), not O(file)). The whole read path (handle + wait) was restructured to defer to it; the old full-read observer functions removed. | F39 |
 | **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
 | **S12** | ✅ **done** | **Dup-prompt anchoring** — already correct: `anchorOwnTurn` iterates newest-first and excludes the pre-send id-set, so a duplicate prompt anchors the NEW record. | F41 |
 | **S13** | ✅ **done** | **Compaction-safe reads:** live-verified the feared chain-break does NOT occur (2.1.162 keeps an unbroken append-only `parentUuid` chain across `/compact`; recall + `messagesSince` hold). Added defense-in-depth: `descendantsOf` classifies lineage and falls back to position for an ORPHANED chain (missing parent), without re-including the late-flush reply. Unit + live. | F43, F25 |
 | **S14** | ✅ **done** | **Paste safety:** `sanitizePasteBody` strips bracketed-paste markers + C0/DEL control bytes (keeps `\n`/`\t`) before `load-buffer`. Closes the ESC[201~ break-out injection. | F48 |
-| S15 | ⬜ | **Re-send safety:** make `budget-exceeded` unmistakably "may still be running — poll, don't re-send". | F44, F45 |
+| **S15** | ✅ **done** | **Re-send safety:** README makes `budget-exceeded` unmistakably "may still be running — do NOT blindly re-send"; routes to `progress()` (toolInFlight/advancing transcriptCount ⇒ alive) and to re-send only `turnComplete === false`. Reinforced by the patience realignment (no library default budget). | F44, F45 |
 | **S16** | ✅ **done** | **Drift canary:** `progress().agentChannelHealthy` (and on the fused belief) goes `false` when ALL observe channels are blind against a non-empty pane (classifier `unknown` + no hook edges + no messages) — the claude-format-drift signature. Any single live channel keeps it healthy; an empty pane is never judged. Unit-tested. | F50 |
 
 **The keystone landed.** S9 + S1 + S2 + the interrupt-authority fix are implemented

@@ -102,7 +102,7 @@ switch (outcome.kind) {
 }
 ```
 
-`completed` guarantees the reply is readable — a following `messagesSince(cursor)` is race-free. **`budget-exceeded` does NOT mean failed** — the turn may still be running; poll again, don't blindly re-send (a re-send can duplicate side effects).
+`completed` guarantees the reply is readable — a following `messagesSince(cursor)` is race-free. **`budget-exceeded` does NOT mean failed** — your patience ran out, but the turn **may still be running**, so do **not** blindly re-send (a re-send into a live turn queues or duplicates *side effects* — the worst failure). Instead poll `progress()`: `toolInFlight === true` or a freshly-advancing `transcriptCount` means *slow-but-alive* (keep waiting); a long flat `transcriptCount` with `state` not `working` means likely wedged (then `interrupt()`, don't re-send). Re-send only a turn you've confirmed never landed — `turnComplete(cursor) === false`.
 
 ### Reading a turn's output (`send` → `messagesSince` / `progress`)
 
@@ -191,6 +191,15 @@ Distinguishing the two is the point: a queued message is *not* lost, so treating
 every unconfirmed send as "re-send" would double-run work issued into a busy
 session. (A still-*running* pane after a daemon restart is `adopt()`, not
 `resume()` — see below.)
+
+**Resume vs adopt vs fork.** Three recovery/branch shapes, all over the same boot core:
+- **`adopt(name)`** — re-attach to a pane that is **still running** (your daemon restarted but the tmux server lived). Inherits the live session; no re-boot.
+- **`resume({ agentSessionId })`** — the pane **died**; continue the *same* conversation in a fresh pane. History intact; the id is preserved.
+- **Fork** — branch a *new* conversation off an existing one's history. There's no `fork()` verb; it's an `extraArgs` recipe: `create({ name, cwd, extraArgs: ["--resume", id, "--fork-session"] })`. claude replays `id`'s history into a **new** conversation that diverges from the original (both continue independently). **Caveat (verified):** the fork's id is **unknowable** up front — `agentSessionId` is `undefined`, so claudemux can only locate the fork's transcript once its first hook edge reports the path, which means the **first `send()` may return `DELIVERY_UNCONFIRMED`** (it couldn't anchor before the path resolved) and `messagesSince`/`turnComplete` are unavailable until then. Use fork for fire-and-forget branches, or read the branch via `capture()`; for a fully readable branch, prefer `resume()` (same id) over fork.
+
+### Boot concurrency is yours
+
+claudemux exposes **no** spawn-throttle. `create()` reports each session's readiness independently and honestly (it boots or throws `ReplTimeout` — never a false-ready, never crosstalk between concurrent boots), but spawning a fleet at once is a load decision the substrate doesn't make for you. If you boot many sessions on a busy box, **serialize or semaphore the `create()` calls yourself** (mechanism, not policy — same north star as patience).
 
 ### Interrupting a working agent (`interrupt()`)
 
