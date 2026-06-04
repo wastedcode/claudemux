@@ -12,6 +12,7 @@ describe("rendezvousPathFor", () => {
     try {
       expect(rendezvousPathFor(ID)).toBe(`/tmp/state-x/claudemux/turns/${ID}.ndjson`);
     } finally {
+      // biome-ignore lint/performance/noDelete: env cleanup needs `delete` — `= undefined` sets the string "undefined" in Node.
       if (prev === undefined) delete process.env.XDG_STATE_HOME;
       else process.env.XDG_STATE_HOME = prev;
     }

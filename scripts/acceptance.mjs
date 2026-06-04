@@ -26,12 +26,12 @@ const check = (name, ok, detail = "") => {
 };
 
 try {
-  console.log(`\n[1] create() — spawn + boot a real claude session\n`);
+  console.log("\n[1] create() — spawn + boot a real claude session\n");
   session = await create({ name: NAME, cwd: CWD, trustWorkspace: true, bootTimeoutMs: 60_000 });
   log("agentSessionId", session.agentSessionId);
   check("session booted, id surfaced", typeof session.agentSessionId === "string");
 
-  console.log(`\n[2] send() — deliver a turn, get a cursor\n`);
+  console.log("\n[2] send() — deliver a turn, get a cursor\n");
   const cursor = await session.send("Reply with exactly the single word: PONG");
   log("cursor", cursor);
   check("send returned a cursor", typeof cursor === "string");
@@ -73,7 +73,7 @@ try {
     reply?.parts.some((x) => x.kind === "text" && x.text.includes("PONG")) ?? false,
   );
 
-  console.log(`\n[5] state() + capture() — the other reads\n`);
+  console.log("\n[5] state() + capture() — the other reads\n");
   log("state()", await session.state());
   log(
     "capture() tail",
@@ -82,7 +82,7 @@ try {
 } finally {
   if (session) {
     await session.kill();
-    console.log(`\n[6] kill() — session torn down\n`);
+    console.log("\n[6] kill() — session torn down\n");
   }
 }
 

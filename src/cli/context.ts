@@ -39,9 +39,7 @@ export interface CommonOpts extends RefOpts {
 export function resolveAgent(name: string | undefined): AgentDef {
   const key = name ?? "claude";
   if (key !== "claude") {
-    process.stderr.write(
-      `claudemux: unknown agent "${key}" — only "claude" is supported\n`,
-    );
+    process.stderr.write(`claudemux: unknown agent "${key}" — only "claude" is supported\n`);
     process.exit(2);
   }
   return claude;
