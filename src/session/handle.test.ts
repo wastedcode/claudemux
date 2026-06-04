@@ -6,7 +6,7 @@ import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SendPayload } from "../backends/types.js";
 import { PromptResponseUnsupported } from "../errors.js";
-import { DELIVERY_UNCONFIRMED, makeHandle } from "./handle.js";
+import { DELIVERED_QUEUED, DELIVERY_UNCONFIRMED, makeHandle } from "./handle.js";
 
 const ctx = claude.transcript;
 if (!ctx) throw new Error("claude.transcript must be defined");
@@ -178,6 +178,26 @@ describe("send() → cursor anchoring", () => {
     // A count cursor here ("0") would later slice the whole transcript — the
     // sentinel is detectable and reads empty instead (F40).
     expect(await h.send("hello")).toBe(DELIVERY_UNCONFIRMED);
+  });
+
+  it("returns DELIVERED_QUEUED (not UNCONFIRMED) when sent into a BUSY session that queued it (S4)", async () => {
+    // No user record flushes (the queued turn hasn't started), but the pane shows
+    // claude's queue affordance — so the message is accepted, not lost. The
+    // consumer must NOT re-send: a distinct sentinel keeps it from double-running.
+    const busyQueued: Backend = {
+      ...noopBackend(),
+      capture: async () => "❯ Press up to edit queued messages\n  esc to interrupt",
+    };
+    const h = makeHandle({
+      backend: busyQueued,
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    expect(await h.send("Reply with TWO")).toBe(DELIVERED_QUEUED);
+    // And both sentinels resolve EMPTY (the record doesn't exist yet) — never a flood.
+    expect((await h.messagesSince(DELIVERED_QUEUED)).length).toBe(0);
   });
 });
 

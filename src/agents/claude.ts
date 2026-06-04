@@ -212,6 +212,12 @@ const rules: ClassifierRules = {
   // interrupt acceptance scenario). Interrupt fires NO `stop` hook, so this
   // pane marker is the only signal — the Observer maps it to `aborted`.
   interrupted: (text) => includesPlain(text, "Interrupted"),
+  // Input sent while a turn is in flight is QUEUED by claude, which shows the
+  // affordance "Press up to edit queued messages" beneath the composer (verified
+  // verbatim on authenticated 2.1.162). The send path uses this to tell a queued
+  // delivery (accepted, runs after the current turn) from a lost one — match the
+  // UI instruction text, which prose never reproduces.
+  queued: (text) => includesPlain(text, "Press up to edit queued message"),
 };
 
 /**

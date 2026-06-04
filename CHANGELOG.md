@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DELIVERED_QUEUED` — send-while-busy is no longer mistaken for a lost send.**
+  A message sent into a still-working session is **queued** by claude (it shows
+  "Press up to edit queued messages") and runs after the in-flight turn — but its
+  user record doesn't flush until then, so `send()` used to return
+  `DELIVERY_UNCONFIRMED`, indistinguishable from a genuinely lost send. A consumer
+  re-sending on unconfirmed would **double-run** the queued message. `send()` now
+  returns the distinct exported `DELIVERED_QUEUED` sentinel when the agent reports
+  its queue affordance — "accepted, will run, don't re-send." Both sentinels still
+  read empty against `messagesSince`/`turnComplete` (never a whole-transcript
+  slice). The agent owns the queue-affordance vocabulary (new optional
+  `ClassifierRules.queued`, mirroring `interrupted`); the send path composes it.
+  Verified live on claude 2.1.162. **Additive / non-breaking.** See README §4.
+
 - **`respond(choice)` + first-class permission prompts** — claudemux now detects
   claude's mid-turn tool-approval prompt (`Do you want to <verb> <target>?` →
   `1. Yes / 2. Yes, allow all… / 3. No`). `state()` reads `permission-prompt` and

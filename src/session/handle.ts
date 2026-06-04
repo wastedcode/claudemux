@@ -34,6 +34,19 @@ import { Mutex } from "./mutex.js";
  */
 export const DELIVERY_UNCONFIRMED = "delivery-unconfirmed";
 
+/**
+ * The {@link Cursor} {@link SessionHandle.send} returns when the message was sent
+ * into a **busy** session and the agent **queued** it — accepted, and it will run
+ * after the in-flight turn finishes (claude shows "Press up to edit queued
+ * messages"). Distinct from {@link DELIVERY_UNCONFIRMED} on purpose: the message
+ * is NOT lost, so a consumer must **not** re-send (that would double-run). Its
+ * user record does not exist yet (the queued turn hasn't started), so like
+ * `DELIVERY_UNCONFIRMED` it resolves empty in `messagesSince`/`turnComplete` —
+ * the consumer `wait()`s for the current turn, lets the queued turn run, then
+ * reads with a fresh cursor. Compare `cursor === DELIVERED_QUEUED`.
+ */
+export const DELIVERED_QUEUED = "delivered-queued";
+
 interface HandleDeps {
   backend: Backend;
   agent: AgentDef;
@@ -109,7 +122,14 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         // type an interleaved turn. Anchoring on the record this send produced is
         // immune to both. Fall back to the sentinel only if it never appears.
         const ownId = await anchorOwnTurn(observer, beforeIds, text);
-        return ownId ?? DELIVERY_UNCONFIRMED; // no anchor → unconfirmed (never a count)
+        if (ownId !== undefined) return ownId;
+        // No user record appeared. Two very different reasons, and the consumer's
+        // action differs: a turn sent into a BUSY session is QUEUED by the agent
+        // (accepted, runs next — do NOT re-send), whereas a true non-delivery is
+        // lost (re-send). The agent owns the "queued" pane vocabulary; we just
+        // ask it. Default to unconfirmed when the agent can't tell.
+        const pane = await deps.backend.capture(ref, CLASSIFIER_CAPTURE);
+        return deps.agent.rules.queued?.(pane) ? DELIVERED_QUEUED : DELIVERY_UNCONFIRMED;
       }),
     messagesSince: (cursor) => mutex.run(async () => messagesSince(observer, cursor)),
     turnComplete: (cursor) =>

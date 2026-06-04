@@ -30,7 +30,7 @@ export {
 
 export { ask } from "./compose.js";
 export type { AskResult } from "./compose.js";
-export { DELIVERY_UNCONFIRMED } from "./session/handle.js";
+export { DELIVERED_QUEUED, DELIVERY_UNCONFIRMED } from "./session/handle.js";
 export { adopt } from "./session/adopt.js";
 export type { AdoptOptions } from "./session/adopt.js";
 export { create } from "./session/create.js";

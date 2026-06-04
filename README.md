@@ -172,11 +172,21 @@ if (!(await s2.turnComplete(cursor))) {
 }
 ```
 
-`send()` returns a real cursor when delivery is confirmed, or the exported
-`DELIVERY_UNCONFIRMED` sentinel when it could not anchor the turn (a dropped Enter).
-The sentinel is detectable and reads empty against `messagesSince`/`turnComplete` —
-it never silently slices the whole transcript. (A still-*running* pane after a
-daemon restart is `adopt()`, not `resume()` — see below.)
+`send()` returns a real cursor when delivery is confirmed. When no user record
+appears it returns one of two exported sentinels — both detectable, both reading
+empty against `messagesSince`/`turnComplete` (never a whole-transcript slice):
+
+- `DELIVERED_QUEUED` — the session was **busy** and the agent **queued** the
+  message (claude shows "Press up to edit queued messages"). It is accepted and
+  runs after the in-flight turn — **do not re-send** (that double-runs). `wait()`
+  out the current turn, let the queued one run, then read with a fresh cursor.
+- `DELIVERY_UNCONFIRMED` — no evidence it landed (a dropped Enter, a boot-race
+  drop). Safe to re-send.
+
+Distinguishing the two is the point: a queued message is *not* lost, so treating
+every unconfirmed send as "re-send" would double-run work issued into a busy
+session. (A still-*running* pane after a daemon restart is `adopt()`, not
+`resume()` — see below.)
 
 ### Interrupting a working agent (`interrupt()`)
 

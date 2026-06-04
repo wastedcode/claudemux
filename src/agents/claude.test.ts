@@ -384,6 +384,27 @@ describe("permission-prompt detection + handling (one unit per ADR 0010)", () =>
   });
 });
 
+describe("claude.rules.queued — send-while-busy affordance (S4 / F12)", () => {
+  // Captured verbatim from authenticated claude 2.1.162: a message sent mid-turn
+  // is queued and the composer shows this affordance beneath it.
+  const QUEUED_PANE_2_1_162 = [
+    "  ❯ Reply with exactly the single word: TWO",
+    "────────────────────────────────────────────",
+    "❯ Press up to edit queued messages",
+    "────────────────────────────────────────────",
+    "  esc to interrupt",
+  ].join("\n");
+
+  it("fires on the queued affordance, not on ordinary working/idle frames", () => {
+    expect(claude.rules.queued?.(QUEUED_PANE_2_1_162)).toBe(true);
+    expect(claude.rules.queued?.(WORKING_PANE_2_1_153)).toBe(false);
+    expect(claude.rules.queued?.(READY_PANE_2_1_153)).toBe(false);
+    // A turn IS still working while something is queued — queued is orthogonal,
+    // not a replacement for the working state.
+    expect(claude.rules.working(QUEUED_PANE_2_1_162)).toBe(true);
+  });
+});
+
 describe("claude.rules — classifier on real 2.1.153 frames", () => {
   it("dialog fires for theme/login/trust", () => {
     expect(claude.rules.dialog(TRUST_DIALOG_2_1_153)).toBe(true);

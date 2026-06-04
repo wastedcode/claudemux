@@ -196,10 +196,17 @@ export interface SessionHandle {
    *
    * Blocks on **write delivery**, NOT on the agent's response. Returns a
    * {@link Cursor} anchored at this send (the user record's id) — pass it to
-   * {@link messagesSince} to read what the turn produces. If delivery could not
-   * be confirmed (no record appeared), returns the `DELIVERY_UNCONFIRMED`
-   * sentinel instead of a fragile count — detectable, and safe to read against
-   * (it never floods).
+   * {@link messagesSince} to read what the turn produces.
+   *
+   * When no user record appears, returns one of two detectable sentinels instead
+   * of a fragile count (both resolve empty in `messagesSince`/`turnComplete`, so
+   * neither floods):
+   *   - `DELIVERED_QUEUED` — the session was **busy** and the agent **queued**
+   *     the message; it is accepted and will run after the in-flight turn. Do
+   *     **not** re-send (that double-runs); `wait()` out the current turn, let the
+   *     queued turn run, then read with a fresh cursor.
+   *   - `DELIVERY_UNCONFIRMED` — no evidence the message landed (a lost Enter, a
+   *     boot-race drop); safe to re-send.
    */
   send(text: string): Promise<Cursor>;
 

@@ -90,12 +90,16 @@ first send.
 *Expected:* delivered as ONE logical turn (bracketed paste + a separate Enter) —
 never per-line submit. (`docs/decisions/0001`.)
 
-**F12 — Send while a turn is still working. ❌**
+**F12 — Send while a turn is still working. ✅**
 *Journey:* the consumer (or a human) sends B before A finished.
-*Expected (to define + standardize):* the bytes are delivered; claude queues or
-concatenates. claudemux should report that the new turn was issued into a
-non-idle session (a `DeliveryWhileBusy` flag or a `state()` the consumer checks
-first). Today `send` is unconditional and silent about it. *Work item.*
+*Standardized (S4):* the bytes are delivered and claude **queues** B (it shows
+"Press up to edit queued messages"); B runs after A. The danger was that B's user
+record doesn't flush until B starts, so `send` returned `DELIVERY_UNCONFIRMED` —
+indistinguishable from a *lost* send, so a re-send-on-unconfirmed consumer would
+**double-run** B. `send` now returns the distinct **`DELIVERED_QUEUED`** sentinel
+when the agent's `queued` pane affordance is present: "accepted, will run, don't
+re-send." Verified live on 2.1.162 (`scripts/flows-send-while-busy.mjs`): a send
+into a working session returns `DELIVERED_QUEUED` and the queued turn then runs.
 
 **F13 — Empty / whitespace send. ⚠️**
 *Expected:* define — claudemux delivers it; claude ignores an empty submit. Note
@@ -427,7 +431,7 @@ pane/transcript.
 | **S2** | ✅ **done** | **Incomplete-turn signal:** `turnComplete(cursor)` (handle + `claudemux turn-complete` CLI) — `false` ⇒ re-send. Live-verified in the crash-recovery flow. | F20, F23 |
 | **(int)** | ✅ **done** | **Interrupt authority:** the handle tracks an interrupt-pending flag (set by `interrupt`, cleared by `send`); `wait`→`aborted`, `state`→`unknown`. Fixes the frozen-spinner mis-read where "esc to interrupt" lingers post-interrupt. | F28, F44 |
 | S3 | ⬜ | **Delivery confirmation:** surface delivered-vs-unconfirmed (vs the opaque count cursor); own/expose the lost-Enter retry. | F10, F12 |
-| S4 | ⬜ | **Send-while-busy:** report that a turn was issued into a non-idle session. | F12 |
+| **S4** | ✅ **done** | **Send-while-busy:** `send` returns the distinct `DELIVERED_QUEUED` sentinel (vs `DELIVERY_UNCONFIRMED`) when a busy session queued the message — "accepted, will run, don't re-send." Agent owns the `queued` pane affordance (`ClassifierRules.queued`, mirroring `interrupted`); the send path composes it. Unit + live (`scripts/flows-send-while-busy.mjs`). | F12 |
 | **S5** | ✅ **done** | **Permission-prompt `awaiting` + `respond()`:** header+menu classifier, `respond("approve"\|"approve-for-session"\|"deny")` (handle + `claudemux respond` CLI), self-confirming so `respond→wait` is race-free. Also fixed the denied-tool dangling-`tool-start` that kept `wait` at `budget-exceeded`. Live-verified on 2.1.162 (approve + deny) via `scripts/flows-permission-prompt.mjs`. | F33, F49 |
 | S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |
 | S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
