@@ -8,6 +8,6 @@ import { type CommonOpts, handleFor } from "./context.js";
  * `working`. ESC on an idle claude is harmless (it clears the input box).
  */
 export async function interruptCli(name: string, opts: CommonOpts = {}): Promise<void> {
-  const handle = handleFor({ ...opts, name });
+  const handle = await handleFor({ ...opts, name });
   await handle.interrupt();
 }

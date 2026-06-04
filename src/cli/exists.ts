@@ -1,11 +1,11 @@
 import { exists } from "../session/registry.js";
-import { type CommonOpts, backend, resolveNamespace } from "./context.js";
+import { type RefOpts, backend, resolveNamespace } from "./context.js";
 
 /**
  * `claudemux exists <name>` — print `true` / `false` and exit 0 / 1
  * (matches POSIX shell convention: existence as success).
  */
-export async function existsCli(name: string, opts: CommonOpts = {}): Promise<void> {
+export async function existsCli(name: string, opts: RefOpts = {}): Promise<void> {
   const ok = await exists({
     name,
     namespace: resolveNamespace(opts.namespace),
