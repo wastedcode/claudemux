@@ -165,3 +165,25 @@ stabilize gate (boot.ts:114); gated-trust throw-BEFORE-keystroke (boot.ts:200); 
   history re-print.
 - **R8 — bound the ready/dialog check to the live region**, not 2000-line scrollback (kills
   stale-scrollback false-matches).
+
+## VERIFIED: boot readiness should be the SessionStart hook, not pane-scraping
+
+Founder pushback: "isReady observes the screen — is that right? no jsonl or hooks?"
+
+Empirically settled (2026-06-04, isolated socket, 3/3):
+- **jsonl is unavailable for readiness** — interactive claude writes no transcript until the
+  first user input (the consult-deadlock). So there is no jsonl ready signal. Closed door.
+- **`SessionStart` is a reliable "ready for input" edge.** Sending IMMEDIATELY after the
+  SessionStart marker (no isReady, no settle) landed the turn every run — `UserPromptSubmit`
+  fired ~0.3–0.45s later, then `Stop`. No premature-edge loss.
+
+**Decision: R5 is promoted from enhancement to the PRIMARY ready mechanism.**
+- Boot ready = the `SessionStart` rendezvous marker appearing. `isReady` (the `/^❯\s*$/`
+  pane regex) is demoted to a FALLBACK for pre-hook claude only — and even then must be
+  ANSI-dim-aware (R1) for the ghost-placeholder box.
+- The pane's only remaining boot role is dismissing residual modals — and even those we
+  ELIMINATE rather than scrape: pre-trust (`hasTrustDialogAccepted`), theme is one-time,
+  login = throw `LoginRequired`. SessionStart fires AFTER dialogs clear, so it doubles as
+  "dialogs done + REPL up."
+- Net: boot readiness stops being a screen-scrape. tmux is the WRITE surface + a dialog/
+  unknown-modal fallback, never the primary read for "is it ready."
