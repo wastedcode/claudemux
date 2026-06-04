@@ -8,7 +8,9 @@
  * socket; every session killed.
  */
 import { execFile } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const pexec = promisify(execFile);
@@ -103,9 +105,14 @@ async function main() {
   rec("kill → exists false (exit 1)", (await cli("exists", b)).code === 1);
 
   // respond: a default-mode session that hits a tool-approval prompt — the
-  // stateless CLI surfaces it via `wait` and answers it via `respond`.
+  // stateless CLI surfaces it via `wait` and answers it via `respond`. Use a
+  // FRESH cwd: a tool prompt only fires in a directory the agent hasn't already
+  // been given standing edit permission for, so a reused cwd can auto-approve and
+  // never prompt (the authoritative permission-prompt coverage is
+  // flows-permission-prompt.mjs, which always uses a clean target).
+  const promptCwd = mkdtempSync(join(tmpdir(), "cmux-cli-prompt-"));
   const p = `cli-p-${Date.now().toString(36)}`;
-  await cli("spawn", p, "--cwd", CWD, "--trust-workspace");
+  await cli("spawn", p, "--cwd", promptCwd, "--trust-workspace");
   rec(
     "respond rejects an unknown choice (exit != 0)",
     (await cli("respond", p, "bogus-choice")).code !== 0,
