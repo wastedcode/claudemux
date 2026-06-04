@@ -76,15 +76,18 @@ per-session readiness; it does not throttle).
 baseline divergence (the stateless-CLI path), not only on an observed `working`
 frame. No false `budget-exceeded`.
 
-**F10 — Lost Enter during the boot race. ⚠️ (sentinel done, retry open)**
-*Journey:* the send lands while the REPL is still painting; the Enter is dropped.
-*Expected:* `send` anchors the cursor on the user record it produced; if that
-record never appears it returns the exported **`DELIVERY_UNCONFIRMED`** sentinel
-(S11) — detectable, and reads empty against `messagesSince`/`turnComplete` so the
-consumer re-sends. *Still open (S3):* claudemux could OWN Posse's
-`deliverWithConfirm` retry (bare-Enter then re-paste) instead of leaving it to the
-consumer — lower priority now that boot waits for a stable ready box before the
-first send.
+**F10 — Lost Enter during the boot race. ✅**
+*Journey:* the send lands while the REPL is still painting; the Enter is dropped,
+so the paste sits in the composer un-submitted and no user record is written.
+*Standardized (S3):* `send` anchors the cursor on the user record it produced; if
+that record never appears AND the message wasn't queued, `send` now OWNS the
+recovery — it re-fires Enter ONCE (`submitOnce`, which submits the existing draft
+and never re-pastes, so it can never duplicate the body) and re-anchors. Only if
+that still finds nothing does it return the exported **`DELIVERY_UNCONFIRMED`**
+sentinel (S11) — detectable, reads empty against `messagesSince`/`turnComplete`,
+so the consumer re-sends. This folds Posse's hand-rolled `deliverWithConfirm`
+recovery into the substrate. Unit-tested deterministically (a backend that drops
+the first Enter → send recovers a real cursor with exactly one retry Enter).
 
 **F11 — Multi-line / pasted prompt. ✅**
 *Expected:* delivered as ONE logical turn (bracketed paste + a separate Enter) —
@@ -430,7 +433,7 @@ pane/transcript.
 | **S1** | ✅ **done** | **Stale-edge override** — subsumed by S9 (a resumed/idle session is no longer judged by a prior life's unclosed `working`). | F20, F32 |
 | **S2** | ✅ **done** | **Incomplete-turn signal:** `turnComplete(cursor)` (handle + `claudemux turn-complete` CLI) — `false` ⇒ re-send. Live-verified in the crash-recovery flow. | F20, F23 |
 | **(int)** | ✅ **done** | **Interrupt authority:** the handle tracks an interrupt-pending flag (set by `interrupt`, cleared by `send`); `wait`→`aborted`, `state`→`unknown`. Fixes the frozen-spinner mis-read where "esc to interrupt" lingers post-interrupt. | F28, F44 |
-| S3 | ⬜ | **Delivery confirmation:** surface delivered-vs-unconfirmed (vs the opaque count cursor); own/expose the lost-Enter retry. | F10, F12 |
+| **S3** | ✅ **done** | **Delivery confirmation:** delivered-vs-queued-vs-unconfirmed surfaced via id-cursor / `DELIVERED_QUEUED` / `DELIVERY_UNCONFIRMED` (never a count, S11+S4); and `send` OWNS the lost-Enter retry — `submitOnce` re-fires Enter once (never re-pastes) then re-anchors before reporting unconfirmed. Unit-tested (dropped-first-Enter backend). | F10, F12 |
 | **S4** | ✅ **done** | **Send-while-busy:** `send` returns the distinct `DELIVERED_QUEUED` sentinel (vs `DELIVERY_UNCONFIRMED`) when a busy session queued the message — "accepted, will run, don't re-send." Agent owns the `queued` pane affordance (`ClassifierRules.queued`, mirroring `interrupted`); the send path composes it. Unit + live (`scripts/flows-send-while-busy.mjs`). | F12 |
 | **S5** | ✅ **done** | **Permission-prompt `awaiting` + `respond()`:** header+menu classifier, `respond("approve"\|"approve-for-session"\|"deny")` (handle + `claudemux respond` CLI), self-confirming so `respond→wait` is race-free. Also fixed the denied-tool dangling-`tool-start` that kept `wait` at `budget-exceeded`. Live-verified on 2.1.162 (approve + deny) via `scripts/flows-permission-prompt.mjs`. | F33, F49 |
 | S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |

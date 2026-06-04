@@ -180,8 +180,11 @@ empty against `messagesSince`/`turnComplete` (never a whole-transcript slice):
   message (claude shows "Press up to edit queued messages"). It is accepted and
   runs after the in-flight turn — **do not re-send** (that double-runs). `wait()`
   out the current turn, let the queued one run, then read with a fresh cursor.
-- `DELIVERY_UNCONFIRMED` — no evidence it landed (a dropped Enter, a boot-race
-  drop). Safe to re-send.
+- `DELIVERY_UNCONFIRMED` — no evidence it landed. Before returning this, `send()`
+  already retries a **lost submit** itself: if the paste reached the composer but
+  the Enter didn't register, it re-fires Enter once (it never re-pastes, so it
+  can't duplicate your text) and re-checks. `DELIVERY_UNCONFIRMED` means even that
+  recovery found nothing — safe to re-send.
 
 Distinguishing the two is the point: a queued message is *not* lost, so treating
 every unconfirmed send as "re-send" would double-run work issued into a busy

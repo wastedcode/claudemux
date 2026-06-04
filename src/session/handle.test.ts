@@ -199,6 +199,43 @@ describe("send() → cursor anchoring", () => {
     // And both sentinels resolve EMPTY (the record doesn't exist yet) — never a flood.
     expect((await h.messagesSince(DELIVERED_QUEUED)).length).toBe(0);
   });
+
+  it("recovers a LOST submit by re-firing Enter once (paste landed, first Enter dropped) (S3)", async () => {
+    // Simulate the lost-Enter race: the paste reaches the composer, but the FIRST
+    // Enter is dropped (no submit, no record). send() must re-fire Enter (never
+    // re-paste) and recover a real cursor — not DELIVERY_UNCONFIRMED.
+    let enters = 0;
+    let pending: string | null = null;
+    let submitted = false;
+    const flaky: Backend = {
+      ...noopBackend(),
+      // The composer shows the un-submitted draft (classifies `unknown`) until the
+      // recovery Enter submits it — this is the pane signature the gate keys on.
+      capture: async () => (submitted ? "❯ " : "❯ hello world"),
+      send: async (_ref, payload: SendPayload) => {
+        if (payload.kind === "paste") {
+          pending = payload.text; // the draft now sits in the composer…
+        } else if (payload.kind === "key" && payload.key === "Enter") {
+          enters++;
+          if (enters >= 2 && pending !== null) {
+            // …only the SECOND Enter (the recovery) actually submits it.
+            appendFileSync(tx, `${userRec("own-1", null, pending)}\n`);
+            pending = null;
+            submitted = true;
+          }
+        }
+      },
+    };
+    const h = makeHandle({
+      backend: flaky,
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    expect(await h.send("hello world")).toBe("own-1"); // recovered, NOT unconfirmed
+    expect(enters).toBe(2); // exactly one retry Enter — never a re-paste
+  });
 });
 
 describe("respond() → permission-prompt answer (S5)", () => {

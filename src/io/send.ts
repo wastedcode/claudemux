@@ -54,3 +54,22 @@ export async function sendOnce(
   const fingerprint = await captureSendBaseline(backend, agent, ref, pre);
   await writeSendBaseline(backend, ref, fingerprint ?? "");
 }
+
+/**
+ * Re-fire the submit key (Enter) alone — the recovery for a **lost submit**: the
+ * paste reached the composer but the Enter keystroke didn't register, so the turn
+ * sits there un-submitted and no user record is ever written.
+ *
+ * Critically it does NOT re-paste the body. A re-`send()` would paste the text a
+ * second time and submit `texttext`; pressing Enter only submits whatever the
+ * composer already holds, so the recovery can never duplicate content. On an
+ * already-empty composer (a genuine non-delivery, not a lost Enter) it is a
+ * harmless no-op — the agent ignores an empty submit.
+ *
+ * Mechanism, not policy: this owns only the keystroke. The caller decides *when*
+ * to use it (its own user record never appeared AND the message wasn't queued)
+ * and re-checks delivery afterward — this does not poll or confirm.
+ */
+export async function submitOnce(backend: Backend, ref: SessionRef): Promise<void> {
+  await backend.send(ref, { kind: "key", key: "Enter" });
+}

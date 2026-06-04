@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`send()` now recovers a lost submit (lost-Enter retry).** If the paste reaches
+  the composer but the Enter keystroke is dropped (a boot-race / timing flake), the
+  turn sits un-submitted and no user record appears. `send()` previously returned
+  `DELIVERY_UNCONFIRMED` immediately; it now owns the recovery — when its anchor
+  fails and the message wasn't queued, it re-fires Enter once (`submitOnce`, which
+  submits the existing draft and **never re-pastes**, so it can never duplicate the
+  body) and re-anchors before reporting `DELIVERY_UNCONFIRMED`. This folds the
+  consumer's hand-rolled "deliver-with-confirm" recovery into the substrate.
+  Unit-tested deterministically (a backend that drops the first Enter). **Additive
+  / non-breaking** — the contract (real cursor | `DELIVERED_QUEUED` |
+  `DELIVERY_UNCONFIRMED`) is unchanged; failures are just rarer.
 - **`DELIVERED_QUEUED` — send-while-busy is no longer mistaken for a lost send.**
   A message sent into a still-working session is **queued** by claude (it shows
   "Press up to edit queued messages") and runs after the in-flight turn — but its

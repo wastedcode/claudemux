@@ -3,7 +3,7 @@ import type { Backend, SessionRef } from "../backends/types.js";
 import { PromptResponseUnsupported } from "../errors.js";
 import { interruptOnce } from "../io/interrupt.js";
 import { respondOnce } from "../io/respond.js";
-import { sendOnce } from "../io/send.js";
+import { sendOnce, submitOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
 import { waitForOutcome } from "../io/wait.js";
 import type { Belief } from "../observe/observer.js";
@@ -123,13 +123,31 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         // immune to both. Fall back to the sentinel only if it never appears.
         const ownId = await anchorOwnTurn(observer, beforeIds, text);
         if (ownId !== undefined) return ownId;
-        // No user record appeared. Two very different reasons, and the consumer's
-        // action differs: a turn sent into a BUSY session is QUEUED by the agent
-        // (accepted, runs next — do NOT re-send), whereas a true non-delivery is
-        // lost (re-send). The agent owns the "queued" pane vocabulary; we just
-        // ask it. Default to unconfirmed when the agent can't tell.
+        // No user record appeared. A turn sent into a BUSY session is QUEUED by
+        // the agent (accepted, runs next — do NOT re-send); report that distinctly
+        // so the consumer doesn't double-run. The agent owns the "queued" pane
+        // vocabulary; we just ask it.
         const pane = await deps.backend.capture(ref, CLASSIFIER_CAPTURE);
-        return deps.agent.rules.queued?.(pane) ? DELIVERED_QUEUED : DELIVERY_UNCONFIRMED;
+        if (deps.agent.rules.queued?.(pane)) return DELIVERED_QUEUED;
+        // Lost-submit recovery — but ONLY when the pane looks like an un-submitted
+        // DRAFT: it classifies `unknown` (a `❯ <text>` composer that is neither the
+        // empty idle box nor the working spinner). That is the lost-Enter signature
+        // — the paste reached the composer but the Enter didn't register. In that
+        // one case re-fire Enter ONCE (submitOnce never re-pastes, so it cannot
+        // duplicate the body) and re-anchor; the needle-match keeps it honest
+        // (confirms a NEW record matching OUR text, never a stray draft).
+        //
+        // If the pane is `working`/`idle` instead, the submit already TOOK (or
+        // there is nothing in the composer) and we merely couldn't anchor the
+        // record — e.g. an adopted session whose transcript isn't locatable. Firing
+        // a stray Enter there would inject a spurious empty turn, so we don't: the
+        // honest answer is DELIVERY_UNCONFIRMED.
+        if (classify(pane, deps.agent.rules) === "unknown") {
+          await submitOnce(deps.backend, ref);
+          const recovered = await anchorOwnTurn(observer, beforeIds, text, RETRY_ANCHOR_POLLS);
+          if (recovered !== undefined) return recovered;
+        }
+        return DELIVERY_UNCONFIRMED;
       }),
     messagesSince: (cursor) => mutex.run(async () => messagesSince(observer, cursor)),
     turnComplete: (cursor) =>
@@ -243,6 +261,10 @@ function descendantsOf(
 }
 
 const ANCHOR_POLLS = 12;
+// The post-recovery re-anchor is shorter: a lost-Enter record appears within a
+// poll or two of the retry Enter, so a true non-delivery still reports promptly
+// rather than paying a second full anchor window.
+const RETRY_ANCHOR_POLLS = 8;
 const ANCHOR_POLL_MS = 250;
 /** Collapse whitespace so a reflowed/echoed prompt still matches. */
 const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
@@ -256,9 +278,10 @@ async function anchorOwnTurn(
   observer: SessionObserver,
   beforeIds: Set<string>,
   text: string,
+  polls: number = ANCHOR_POLLS,
 ): Promise<string | undefined> {
   const needle = squash(text).slice(0, 80); // prefix tolerates echo reflow / truncation
-  for (let attempt = 0; attempt < ANCHOR_POLLS; attempt++) {
+  for (let attempt = 0; attempt < polls; attempt++) {
     const msgs = observer.thread().messages;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
