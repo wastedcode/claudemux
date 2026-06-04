@@ -59,7 +59,17 @@ try {
   check("done came from the hook channel (reliable)", p?.hookChannelHealthy === true);
 
   console.log(`\n[4] messagesSince(cursor) — read the turn's conversation\n`);
-  const msgs = await session.messagesSince(cursor);
+  // The hook `done` edge PRECEDES the transcript flush by ~100ms, so reading on
+  // `phase==="done"` races the reply record. A progress-polling consumer must
+  // therefore poll the READ too (or use `wait()`, which closes the skew for you).
+  // Poll messagesSince until the assistant reply lands, bounded by our patience.
+  let msgs = [];
+  const readDeadline = Date.now() + 15_000;
+  while (Date.now() < readDeadline) {
+    msgs = await session.messagesSince(cursor);
+    if (msgs.some((m) => m.role === "assistant")) break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
   for (const m of msgs) {
     const text = m.parts
       .map((x) => (x.kind === "text" ? x.text : `[${x.kind}:${x.tool ?? ""}]`))
