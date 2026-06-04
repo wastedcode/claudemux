@@ -26,6 +26,28 @@ import { hasSession } from "./sessions.js";
  * `label` is the user-facing identifier used in error messages (defaults to
  * `target`); the wrapper in `tmuxBackend` passes the public label.
  */
+/**
+ * Strip control bytes from a paste body that could break out of the bracketed
+ * paste or inject terminal control. The danger (F48): a body containing the
+ * paste-END marker `ESC[201~` closes the bracket early, so its tail submits as
+ * *typed* input — content carrying terminal escapes (logs, diffs, adversarial
+ * input) could run commands. Keep `\n` (literal newlines — the point of bracketed
+ * paste) and `\t`; drop the bracketed-paste markers explicitly (no `[201~`
+ * residue) plus every other C0/DEL control byte (incl. bare ESC). Normalize CRs
+ * to `\n` BEFORE stripping so a lone `\r` becomes a newline, not nothing.
+ */
+export function sanitizePasteBody(text: string): string {
+  return (
+    text
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+      .replace(/\x1b\[20[01]~/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+      .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+  );
+}
+
 export async function pasteText(
   exec: TmuxExec,
   target: string,
@@ -34,7 +56,7 @@ export async function pasteText(
 ): Promise<void> {
   await ensureLive(exec, target, label);
 
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalized = sanitizePasteBody(text);
   const bufferName = `claudemux-${randomBytes(4).toString("hex")}`;
 
   {

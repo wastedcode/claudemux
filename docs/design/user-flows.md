@@ -321,7 +321,7 @@ flood of duplicates, or it re-acts on old turns. *Standardize:* a failed anchor
 should return a sentinel the consumer can DETECT (DeliveryUnconfirmed, S3), not a
 cursor that silently means "everything."
 
-**F41 — `anchorOwnTurn` anchors the WRONG turn on duplicate prompts. ❌**
+**F41 — `anchorOwnTurn` anchors the WRONG turn on duplicate prompts. ✅ (already correct)**
 *Hidden:* the cursor is found by matching the first 80 chars of the sent text
 against user records. Two build agents with identical kickoffs, a retry of the
 same prompt, or a prompt that's a prefix of an earlier one → the anchor can land
@@ -381,7 +381,7 @@ a session and loses an answer it could have read first. *Standardize:* document
 that `kill` is a hard stop (use `interrupt` + read to stop-and-keep); consider a
 `drain` option.
 
-**F48 — Pasting content with control/escape sequences. ❌**
+**F48 — Pasting content with control/escape sequences. ✅ (S14)**
 *Hidden:* `send` pastes the body via bracketed paste. A prompt containing the
 bracketed-paste terminator (`ESC[201~`) or raw control bytes could end the paste
 early or inject keys. *Bites:* user/tool content with terminal escapes (logs,
@@ -424,9 +424,9 @@ pane/transcript.
 | S8 | ⬜ | **Long-think non-stuck:** confirm a `working` pane suppresses stuck-detection; add a live test. | F17 |
 | S10 | ⬜ | **Bounded reads:** tail/offset the rendezvous + transcript instead of full-file scans per poll. | F39 |
 | **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
-| S12 | ⬜ | **Dup-prompt anchoring:** anchor on the newest matching record; document the caveat. | F41 |
+| **S12** | ✅ **done** | **Dup-prompt anchoring** — already correct: `anchorOwnTurn` iterates newest-first and excludes the pre-send id-set, so a duplicate prompt anchors the NEW record. | F41 |
 | S13 | ⬜ | **Compaction-safe reads:** positional fallback when the causal walk yields nothing but the transcript grew. | F43, F25 |
-| S14 | ⬜ | **Paste safety:** sanitize bracketed-paste terminators + control bytes in `send`. | F48 |
+| **S14** | ✅ **done** | **Paste safety:** `sanitizePasteBody` strips bracketed-paste markers + C0/DEL control bytes (keeps `\n`/`\t`) before `load-buffer`. Closes the ESC[201~ break-out injection. | F48 |
 | S15 | ⬜ | **Re-send safety:** make `budget-exceeded` unmistakably "may still be running — poll, don't re-send". | F44, F45 |
 | S16 | ⬜ | **Drift canary:** surface `agentChannelHealthy` when parsing yields nothing vs a non-empty pane/transcript. | F50 |
 
