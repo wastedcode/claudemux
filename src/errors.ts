@@ -160,6 +160,28 @@ export class WorkspaceUntrusted extends ClaudemuxError {
 }
 
 /**
+ * Thrown by {@link SessionHandle.respond} when the agent declares no
+ * permission-prompt handling — there is no menu mapping to translate a
+ * {@link PromptChoice} into a keystroke, so the substrate refuses to guess a
+ * digit (a wrong guess could pick the broadest "allow all" option). An agent
+ * grows prompt handling by adding the mapping to its `AgentDef`; until then a
+ * consumer that hits an `awaiting{permission-prompt}` must answer the agent
+ * out-of-band (or run it in a non-interactive permission mode).
+ */
+export class PromptResponseUnsupported extends ClaudemuxError {
+  /** The agent that has no permission-prompt mapping (e.g. a future codex def). */
+  readonly agentName: string;
+
+  constructor(sessionName: string, agentName: string) {
+    super(
+      `agent "${agentName}" declares no permission-prompt handling; respond() has no menu mapping to answer the prompt`,
+      sessionName,
+    );
+    this.agentName = agentName;
+  }
+}
+
+/**
  * Thrown when the underlying pane's process has died but the pane container
  * is still present in the backend's data model (Case A pane-death).
  */

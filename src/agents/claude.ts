@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { AgentSessionIdConflict } from "../errors.js";
 import type { ClassifierRules } from "../state/types.js";
-import type { Message, MessagePart } from "../types.js";
+import type { Message, MessagePart, PromptChoice } from "../types.js";
 import { stripSgr } from "../util/ansi.js";
 import type { AgentDef, BootDialog, HookEdge } from "./types.js";
 
@@ -24,17 +24,66 @@ const includesPlain = (pane: string, needle: string): boolean => stripSgr(pane).
 /**
  * Pane-text substrings that classify a Claude Code permission prompt.
  *
- * **Empty by design for v0.0.1** — per [[decisions/0010-claudemux-owns-no-config]]
- * permission-prompt detection and handling defer to v0.1 as one unit. With no
- * substrings the `permissionPrompt` rule returns `false`, so a prompt
- * classifies as `unknown`, never `idle`. `permission-prompt` stays a reserved
- * member of the public `State` type; v0.1 begins emitting it (non-breaking)
- * once this const is populated, paired with a `respond()` primitive to answer
- * the prompt. The enumerated shapes (the v0.1 starting point) live in
- * `test/fixtures/permission-prompt-classifier-fixture.json`; the v0.0.1
- * consequence and the non-interactive-mode workaround are documented in README §5.
+ * **The stable signal is the prompt header `Do you want to <verb> <target>?`** —
+ * it precedes the `❯ 1. Yes / 2. Yes, allow all… / 3. No` menu for every
+ * tool class (Write/Edit/Bash/WebFetch/MCP). The trailing-space anchor
+ * `"Do you want to "` avoids matching the same phrase in prose. Verified
+ * verbatim against authenticated claude 2.1.162 (Write hello.txt → the pane
+ * reads `Do you want to create hello.txt?`); first enumerated on 2.1.153.
+ *
+ * Per [[decisions/0010-claudemux-owns-no-config]] detection and handling are
+ * **one unit** — this matcher is populated together with the menu mapping in
+ * {@link permissionPrompt} and the handle's `respond()`. A detected prompt now
+ * classifies as `permission-prompt` (still never `idle`), and `wait()` surfaces
+ * it as `{ kind: "awaiting", on: "permission-prompt" }` for the consumer to
+ * answer. The enumerated shapes live in
+ * `test/fixtures/permission-prompt-classifier-fixture.json`; the auth-gated
+ * replay (`permission-prompts.test.ts`) re-triggers each under network
+ * isolation. See README §5.
  */
-const PERMISSION_PROMPT_SUBSTRINGS: readonly string[] = [];
+const PERMISSION_PROMPT_SUBSTRINGS: readonly string[] = ["Do you want to "];
+
+/**
+ * The selected first option of the approval menu — the cursor arrow `❯` then
+ * `1.`. This is the STRUCTURAL half of the classifier and it is what makes the
+ * header safe: the classifier scans the full visible region (40 rows), so a
+ * *completed* turn whose reply tail happens to end "…do you want to proceed?"
+ * sits in the window right above the empty input box, and an in-flight turn can
+ * stream the same phrase. The header substring alone would mis-fire on both.
+ * Requiring an actual selectable `❯ 1.` menu line — which an assistant reply
+ * never renders — disambiguates a real prompt from prose. (Boot dialogs also
+ * render `❯ 1.`, but they lack the header AND are classified *before*
+ * permission-prompt, so they never reach here.)
+ */
+const PERMISSION_PROMPT_MENU = /❯ ?1\.\s/;
+
+/**
+ * True when the captured pane shows a tool-approval prompt: the header
+ * (`Do you want to …?`) AND the selectable `❯ 1.` menu both present. Both
+ * halves are required — see {@link PERMISSION_PROMPT_MENU}.
+ */
+function isPermissionPrompt(text: string): boolean {
+  const plain = stripSgr(text);
+  return (
+    PERMISSION_PROMPT_SUBSTRINGS.some((s) => plain.includes(s)) &&
+    PERMISSION_PROMPT_MENU.test(plain)
+  );
+}
+
+/**
+ * The keystroke that selects each neutral {@link PromptChoice} in claude's
+ * tool-approval menu. claude's option order is stable across tool classes:
+ * `1. Yes` (approve once) · `2. Yes, allow all … during this session` ·
+ * `3. No`. A bare digit selects AND confirms — no Enter (verified against
+ * authenticated claude 2.1.162: sending `1` to the Write prompt wrote the file
+ * immediately). The SOLE place that knows this order (layering grep keeps the
+ * vocabulary out of the agent-agnostic layers).
+ */
+const PERMISSION_PROMPT_CHOICE_KEYS: Record<PromptChoice, "1" | "2" | "3"> = {
+  approve: "1",
+  "approve-for-session": "2",
+  deny: "3",
+};
 
 const dialog: BootDialog[] = [
   {
@@ -149,7 +198,7 @@ const rules: ClassifierRules = {
   // Dialog predicate: any of the known boot-dialog matchers firing.
   // Mirrors the dialog list above so the classifier doesn't drift apart.
   dialog: (text) => dialog.some((d) => d.matches(text)),
-  permissionPrompt: (text) => PERMISSION_PROMPT_SUBSTRINGS.some((s) => includesPlain(text, s)),
+  permissionPrompt: (text) => isPermissionPrompt(text),
   // "esc to interrupt" is the reliable in-flight signal — present for the
   // whole turn (verified ~2.2s on a trivial reply against 2.1.153). The
   // post-turn summary (`✻ Crunched for 1s`) does NOT contain it, so matching
@@ -549,6 +598,7 @@ export const claude: AgentDef = {
   buildArgv,
   boot: { dialogs: dialog, isReady },
   rules,
+  permissionPrompt: { respondKey: (choice) => PERMISSION_PROMPT_CHOICE_KEYS[choice] },
   transcript: {
     locate: locateTranscript,
     parseLine: parseTranscriptLine,

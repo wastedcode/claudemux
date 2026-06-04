@@ -4,7 +4,8 @@
  *   CLAUDEMUX_SOCKET=cmux-cli node scripts/surface-cli.mjs
  *
  * Covers: spawn · exists · list · send · wait · messages · ask · state ·
- * capture · interrupt · resume · kill. Isolated socket; every session killed.
+ * capture · interrupt · resume · respond (permission-prompt) · kill. Isolated
+ * socket; every session killed.
  */
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -100,6 +101,30 @@ async function main() {
 
   await cli("kill", b);
   rec("kill → exists false (exit 1)", (await cli("exists", b)).code === 1);
+
+  // respond: a default-mode session that hits a tool-approval prompt — the
+  // stateless CLI surfaces it via `wait` and answers it via `respond`.
+  const p = `cli-p-${Date.now().toString(36)}`;
+  await cli("spawn", p, "--cwd", CWD, "--trust-workspace");
+  rec(
+    "respond rejects an unknown choice (exit != 0)",
+    (await cli("respond", p, "bogus-choice")).code !== 0,
+  );
+  await cli(
+    "send",
+    p,
+    "Create a file named cli-approved.txt with the word PONG. Use the Write tool. Do not ask first.",
+  );
+  const pw1 = await cli("wait", p);
+  rec(
+    "wait prints awaiting{permission-prompt}",
+    pw1.stdout.includes("permission-prompt"),
+    pw1.stdout.trim(),
+  );
+  rec("respond approve exits cleanly", (await cli("respond", p, "approve")).code === 0);
+  const pw2 = await cli("wait", p);
+  rec("after respond, wait prints completed", pw2.stdout.includes("completed"), pw2.stdout.trim());
+  await cli("kill", p);
 }
 
 try {

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`respond(choice)` + first-class permission prompts** — claudemux now detects
+  claude's mid-turn tool-approval prompt (`Do you want to <verb> <target>?` →
+  `1. Yes / 2. Yes, allow all… / 3. No`). `state()` reads `permission-prompt` and
+  `wait()` returns `{ kind: "awaiting", on: "permission-prompt" }` instead of
+  running out its budget. Answer it with `respond(choice)` —
+  `"approve"` / `"approve-for-session"` / `"deny"` (the agent owns the menu
+  option-order; you never type a digit). Mechanism, not policy: it fires the
+  keystroke and self-confirms the menu cleared before returning (so the natural
+  `respond → wait` loop is race-free), but *whether* to approve is yours —
+  claudemux never auto-answers an authority grant. New typed error
+  `PromptResponseUnsupported` (an agent that declares no menu mapping). New
+  public type `PromptChoice`. New CLI verb `claudemux respond <name> <choice>`.
+  Detection + handling shipped as **one unit** per ADR 0010; verified verbatim
+  against authenticated claude 2.1.162 (both approve and deny). **Additive /
+  non-breaking** — `permission-prompt` was already a reserved `State`/`awaiting`
+  member. See README §5.
+
+### Fixed
+
+- **Denied tool no longer wedges `wait()` at `budget-exceeded`.** A tool the
+  consumer *denies* fires `PreToolUse` (a `tool-start` hook edge) but never
+  `PostToolUse` — so the hook-derived belief was stuck at `phase=tool`/`working`
+  forever though the turn was over, and `wait()` timed out on the stuck detector.
+  The fused belief now cross-checks the pane: when the hooks say `working` but the
+  pane has settled to a clean idle box (which a genuinely in-flight tool never
+  renders), the turn has ended. (Surfaced by the permission-prompt deny path.)
+
 ## [0.1.0] - 2026-06-02
 
 ### Added

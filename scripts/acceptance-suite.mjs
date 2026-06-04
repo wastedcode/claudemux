@@ -79,8 +79,13 @@ async function scenarioB() {
   console.log("\n[B] tool-using turn — phase + tool parts\n");
   const s = await fresh("acc-b");
   try {
+    // The tool must DWELL long enough to be sampled — `echo` returns in <1ms, so
+    // the `tool-start`→`tool-end` window can close between two 200ms progress
+    // polls and the (real) `tool` phase is missed (sampling race, not a bug). A
+    // ~2s sleep keeps the tool in flight across several polls, so the phase
+    // contract is exercised deterministically.
     const c = await s.send(
-      "Use the Bash tool to run exactly: echo TOOLRAN. Then reply with the single word DONE.",
+      "Use the Bash tool to run exactly: sleep 2 && echo TOOLRAN. Then reply with the single word DONE.",
     );
     const phases = await waitDone(s);
     await s.wait(); // settle past the hook-done→transcript-flush skew before reading

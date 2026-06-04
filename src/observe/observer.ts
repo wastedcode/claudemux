@@ -107,8 +107,10 @@ export function currentLifeEdges(edges: readonly HookEdge[]): readonly HookEdge[
  * Fuse the reliable signals + the pre-classified pane into one {@link Belief}.
  * `state` precedence: pane-only modals (dialog/permission) → hook lifecycle
  * (when the channel is live and a turn has happened) → pane (hooks silent/off).
- * Only {@link currentLifeEdges} feed the belief, so a resumed session is never
- * judged by its prior life's edges.
+ * The hook-lifecycle branch carries one pane cross-check for its blind spot: a
+ * denied/abandoned tool leaves a dangling `tool-start` (no `tool-end`), so a
+ * settled idle pane overrides a stuck hook `working`. Only {@link currentLifeEdges}
+ * feed the belief, so a resumed session is never judged by its prior life's edges.
  */
 export function believe(o: {
   edges: readonly HookEdge[];
@@ -137,7 +139,15 @@ export function believe(o: {
   } else if (interrupted) {
     state = "unknown"; // aborted: hook phase is stale, pane is a draft (not idle)
   } else if (prog.hookChannelHealthy && prog.phase !== "unknown") {
-    state = prog.state; // the reliable hook lifecycle (working / idle)
+    // The reliable hook lifecycle (working / idle) — with ONE pane cross-check
+    // for its blind spot. A tool the consumer DENIES (or claude abandons) fires
+    // `tool-start` but never `tool-end`, so the hook phase stays `tool` → working
+    // forever though the turn is over. When the hooks say working but the pane
+    // has settled to a clean idle box, the turn actually ended — trust the pane.
+    // A genuinely in-flight tool never renders the idle box (it shows the
+    // "esc to interrupt" spinner), so this only ever fires on the dangling-tool
+    // case; any transient idle frame is filtered by wait()'s idle stabilization.
+    state = prog.state === "working" && o.pane.state === "idle" ? "idle" : prog.state;
   } else {
     state = o.pane.state; // hooks silent (off, or no turn yet) → trust the pane
   }

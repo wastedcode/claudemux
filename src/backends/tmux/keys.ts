@@ -77,7 +77,7 @@ export async function pasteText(
 export async function sendKey(
   exec: TmuxExec,
   target: string,
-  key: "Enter" | "Escape" | "1" | "2" | "y" | "n",
+  key: "Enter" | "Escape" | "1" | "2" | "3" | "y" | "n",
   label: string = target,
 ): Promise<void> {
   await ensureLive(exec, target, label);

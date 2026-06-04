@@ -71,6 +71,23 @@ export interface Message {
 }
 
 /**
+ * A neutral answer to an agent permission prompt (the tool-approval menu that
+ * `wait()` surfaces as `{ kind: "awaiting", on: "permission-prompt" }`). The
+ * three choices map to every agent's prompt regardless of its menu wording or
+ * option order — the agent owns the translation to a concrete keystroke
+ * ({@link SessionHandle.respond}). Backend-neutral by design: a consumer writes
+ * `respond("approve")`, never a digit.
+ *
+ *   - `"approve"` — allow this one action (claude: option 1, "Yes").
+ *   - `"approve-for-session"` — allow it and stop asking for the rest of the
+ *     session (claude: option 2, "Yes, allow all … during this session"). An
+ *     authority grant broader than a single action — the consumer's call.
+ *   - `"deny"` — refuse (claude: option 3, "No"); the agent reports back to the
+ *     model that the tool was rejected and continues the turn.
+ */
+export type PromptChoice = "approve" | "approve-for-session" | "deny";
+
+/**
  * An opaque, serializable anchor into a session's message stream, returned by
  * {@link SessionHandle.send}. Pass it to {@link SessionHandle.messagesSince} to
  * read everything produced since that send. Durable across a process restart
@@ -216,6 +233,31 @@ export interface SessionHandle {
    * Policy-free: the consumer turns staleness into its own patience.
    */
   progress(): Promise<Progress>;
+
+  /**
+   * Answer a permission prompt — the tool-approval menu `wait()` reports as
+   * `{ kind: "awaiting", on: "permission-prompt" }`. Sends the single keystroke
+   * that selects {@link PromptChoice} in this agent's menu (the agent owns the
+   * option-order mapping, so the consumer never types a digit). The natural
+   * pairing: `wait()` → `awaiting{permission-prompt}` → `respond(choice)` →
+   * `wait()` again for the turn to actually finish — `respond` is to the prompt
+   * what `send` is to the composer.
+   *
+   * **Mechanism, not policy** (mirrors {@link interrupt}). It fires the keystroke
+   * *unconditionally* — it does not first confirm a prompt is showing. Unlike
+   * `interrupt`'s ESC, a stray digit is NOT harmless: sent when no prompt is up
+   * it lands in the composer as draft text that the next `send()` would prepend.
+   * So gate it on a permission-prompt reading taken in the SAME in-process
+   * sequence — and unlike an interrupt race, the prompt is stable (it waits for
+   * an answer; it will not resolve underfoot), so a tight `state()`/`wait()` →
+   * `respond()` is reliable. Choosing whether/how to approve is the consumer's
+   * authority, never the substrate's.
+   *
+   * Blocks on write delivery only — like `send`, not on what the turn does next.
+   * Throws {@link PromptResponseUnsupported} if the agent declares no
+   * permission-prompt handling (no menu mapping to translate the choice).
+   */
+  respond(choice: PromptChoice): Promise<void>;
 
   /**
    * Fire `Escape` at the pane — claude's own interrupt key — to stop a

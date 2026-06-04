@@ -1,5 +1,5 @@
 import type { ClassifierRules } from "../state/types.js";
-import type { Message } from "../types.js";
+import type { Message, PromptChoice } from "../types.js";
 
 /**
  * A single boot dialog: how to recognize it and how to respond.
@@ -108,6 +108,27 @@ export interface AgentDef {
 
   /** Classifier predicates for this agent. */
   readonly rules: ClassifierRules;
+
+  /**
+   * Permission-prompt handling — how to *answer* the tool-approval menu the
+   * classifier detects via `rules.permissionPrompt`. The SOLE owner of this
+   * agent's menu option-order (claude: `1` approve-once / `2` approve-for-session
+   * / `3` deny), so the neutral {@link PromptChoice} → keystroke mapping stays
+   * out of the agent-agnostic layers (grep-enforced, like the dialog keys). The
+   * handle's `respond(choice)` calls {@link respondKey} and fires the returned
+   * key; one keystroke selects-and-confirms (no Enter — verified against
+   * authenticated claude 2.1.162).
+   *
+   * Optional: an agent that declares none has `respond()` throw
+   * `PromptResponseUnsupported` rather than the substrate guessing a digit (a
+   * wrong guess could pick "allow all"). Pairs with a non-empty
+   * `rules.permissionPrompt` — detection without an answer mapping would surface
+   * `awaiting{permission-prompt}` with no way to act on it.
+   */
+  readonly permissionPrompt?: {
+    /** The keystroke that selects {@link PromptChoice} in this agent's menu. */
+    respondKey(choice: PromptChoice): "1" | "2" | "3";
+  };
 
   /**
    * Reading the agent's session transcript. The **sole owner** of this agent's

@@ -5,7 +5,8 @@
  *
  * Covers: exists · list · create · ask (round-trip) · wait→TurnOutcome ·
  * send+messagesSince · state · progress · capture · interrupt · adopt · resume
- * (proves history continuity) · kill. Isolated socket; every session self-killed.
+ * (proves history continuity) · respond (permission-prompt) · kill. Isolated
+ * socket; every session self-killed.
  */
 import { mkdirSync } from "node:fs";
 import { adopt, ask, create, exists, kill, list, resume } from "../dist/index.js";
@@ -131,8 +132,26 @@ async function main() {
     txt(r2.messages).slice(0, 40),
   );
 
-  // ── kill(): gone afterwards ─────────────────────────────────────────────
   await s2.kill();
+
+  // ── respond(): answer a tool-approval prompt (default permission mode) ────
+  const pp = `surf-p-${Date.now().toString(36)}`;
+  const s3 = await create(opts(pp));
+  await s3.send(
+    "Create a file named surf-respond.txt with the word PONG. Use the Write tool. Do not ask first.",
+  );
+  const po = await s3.wait({ timeoutMs: 60_000 });
+  rec(
+    "wait() → awaiting{permission-prompt} on a tool-approval prompt",
+    po.kind === "awaiting" && po.on === "permission-prompt",
+    JSON.stringify(po),
+  );
+  await s3.respond("approve");
+  const po2 = await s3.wait({ timeoutMs: 60_000 });
+  rec("respond('approve') → next wait() completes", po2.kind === "completed", JSON.stringify(po2));
+  await s3.kill();
+
+  // ── kill(): gone afterwards ─────────────────────────────────────────────
   await new Promise((r) => setTimeout(r, 400));
   rec(
     "kill() — exists() is false afterwards",

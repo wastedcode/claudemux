@@ -245,14 +245,16 @@ an infinite hang. *Standardize:* this composes with F20 — a resumed session wi
 stale `working` edge must not look "wedged"; the idle-pane override (F20 fix)
 makes `wait` return promptly once the box is idle.
 
-**F33 — wait hits an awaiting state (permission prompt). ⚠️**
+**F33 — wait hits an awaiting state (permission prompt). ✅**
 *Journey:* the agent asks to run a tool that needs approval.
 *Expected:* `wait()` returns `{kind:"awaiting", on:"permission-prompt"}`
-immediately (actionable, no settle). *Standardize:* v0.0.1 ships the
-permission-prompt classifier empty (ADR 0010) — so today this surfaces as
-`budget-exceeded` instead. Populating it + a `respond()` primitive is the v0.1
-unit. Mark the gap explicitly so a consumer in default permission mode knows to
-use a non-interactive mode.
+immediately (actionable, no settle); `respond(choice)` answers it; the next
+`wait()` resolves `completed`. *Standardized (S5):* the classifier matches the
+`Do you want to …?` header AND the `❯ 1.` menu (both required — a reply tail or
+streaming frame can carry the header phrase in the 40-row capture). `respond()`
+fires the agent-mapped digit and self-confirms the menu cleared before returning,
+so the `respond → wait` loop is race-free. Verified live against authenticated
+claude 2.1.162 (`scripts/flows-permission-prompt.mjs`, approve + deny).
 
 ---
 
@@ -389,13 +391,16 @@ early or inject keys. *Bites:* user/tool content with terminal escapes (logs,
 diffs, adversarial input). *Standardize:* sanitize/escape the paste body, or
 document the constraint; add a fixture with embedded escapes. (Security-adjacent.)
 
-**F49 — A permission prompt is invisible — looks like a slow turn. ❌**
-*Hidden:* v0.0.1 ships the permission-prompt classifier EMPTY (ADR 0010). A
-default-mode agent that hits a permission prompt mid-turn classifies as
-`unknown`/working → `wait` runs to `budget-exceeded`. *Bites:* the consumer sees
-"slow/stuck," not "waiting for me" — and can't tell why. *Standardize:* F33/S5 —
-populate the classifier + `respond()`; until then the docs must steer
-default-mode-at-scale consumers to a non-interactive permission mode.
+**F49 — A permission prompt is invisible — looks like a slow turn. ✅**
+*Was hidden:* with the classifier empty, a default-mode agent that hit a prompt
+mid-turn classified as `unknown`/working → `wait` ran to `budget-exceeded`; the
+consumer saw "slow/stuck," not "waiting for me." *Standardized (S5):* the prompt
+is now a first-class `awaiting{permission-prompt}` outcome answered by
+`respond()`. A subtle second bite surfaced and was fixed here: a *denied* tool
+fires `tool-start` but no `tool-end`, so the hook belief stuck at `working`
+forever → `wait` still budget-exceeded after the deny. The fused belief now lets
+a settled idle pane override that dangling-tool `working` (a real in-flight tool
+never shows the idle box). Both branches verified live on 2.1.162.
 
 **F50 — claude version drift silently breaks parsing. ⚠️**
 *Hidden:* `isReady` keys off SGR-dim styling; `parseMarker`/`parseTranscriptLine`
@@ -419,7 +424,7 @@ pane/transcript.
 | **(int)** | ✅ **done** | **Interrupt authority:** the handle tracks an interrupt-pending flag (set by `interrupt`, cleared by `send`); `wait`→`aborted`, `state`→`unknown`. Fixes the frozen-spinner mis-read where "esc to interrupt" lingers post-interrupt. | F28, F44 |
 | S3 | ⬜ | **Delivery confirmation:** surface delivered-vs-unconfirmed (vs the opaque count cursor); own/expose the lost-Enter retry. | F10, F12 |
 | S4 | ⬜ | **Send-while-busy:** report that a turn was issued into a non-idle session. | F12 |
-| S5 | ⬜ | **Permission-prompt `awaiting`:** populate the classifier + `respond()` (v0.1 unit). | F33 |
+| **S5** | ✅ **done** | **Permission-prompt `awaiting` + `respond()`:** header+menu classifier, `respond("approve"\|"approve-for-session"\|"deny")` (handle + `claudemux respond` CLI), self-confirming so `respond→wait` is race-free. Also fixed the denied-tool dangling-`tool-start` that kept `wait` at `budget-exceeded`. Live-verified on 2.1.162 (approve + deny) via `scripts/flows-permission-prompt.mjs`. | F33, F49 |
 | S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |
 | S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
 | S8 | ⬜ | **Long-think non-stuck:** confirm a `working` pane suppresses stuck-detection; add a live test. | F17 |

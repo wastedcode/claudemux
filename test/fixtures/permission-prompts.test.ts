@@ -29,7 +29,7 @@ const OUTPUT_CAP_BYTES = 64 * 1024;
 
 type Scenario = {
   id: string;
-  trigger: { tool: string; args: Record<string, unknown> };
+  trigger: { tool: string; args: Record<string, unknown>; prompt?: string };
   flags: string[];
   expectsPrompt: boolean;
   promptTextSnippet?: string;
@@ -128,16 +128,21 @@ describe("permission-prompt classifier predicates", () => {
             ...claudeArgs,
           );
 
-          // Send the trigger keystrokes via send-keys. The actual mechanism
-          // for triggering each (Write/Edit/Bash/WebFetch/MCP) is to type
-          // the corresponding tool-invoking prompt into the agent's input
-          // and submit. Concrete keystroke construction is centralized in
-          // a helper to keep the loop simple; for the pending-enumeration
-          // state, the helper is a placeholder.
+          // A fresh sandbox HOME means the first run shows the workspace-trust
+          // dialog before the REPL is usable — dismiss it (option 1) so the
+          // trigger lands at a real prompt, not the dialog. Best-effort: if the
+          // dialog never appears (already-trusted path), the "1"+Enter is a
+          // harmless no-op the composer clears.
+          await settleForBoot(scenario.id);
+
+          // Send the trigger: type the tool-invoking prompt and submit. The
+          // prompt is enumerated per-scenario in the fixture; submitting it
+          // makes claude attempt the tool, which raises the permission prompt
+          // under `--permission-mode default`.
           await sendTrigger(scenario);
 
           // Settle, then capture.
-          await new Promise((r) => setTimeout(r, 5000));
+          await new Promise((r) => setTimeout(r, 6000));
           const pane = tmux("capture-pane", "-p", "-t", scenario.id);
 
           if (scenario.expectsPrompt) {
@@ -157,9 +162,33 @@ describe("permission-prompt classifier predicates", () => {
   }
 });
 
+/**
+ * Wait out boot and dismiss the first-run workspace-trust dialog. Polls the
+ * pane up to ~12s: if "trust this folder" shows, answers option 1 (send-keys
+ * "1" then Enter) and waits for it to clear; returns once a `❯` input box is
+ * present (or the budget elapses — the trigger still gets a shot).
+ */
+async function settleForBoot(session: string): Promise<void> {
+  for (let i = 0; i < 24; i++) {
+    const pane = tmux("capture-pane", "-p", "-t", session);
+    if (pane.includes("trust this folder")) {
+      tmux("send-keys", "-t", session, "1");
+      tmux("send-keys", "-t", session, "Enter");
+      await new Promise((r) => setTimeout(r, 1500));
+      continue;
+    }
+    if (pane.includes("❯")) return; // REPL ready for input
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 async function sendTrigger(scenario: Scenario): Promise<void> {
-  // Placeholder: the substrate-build acceptance pass will fill this in
-  // with concrete trigger-construction logic. The current shape lets the
-  // suite run end-to-end against an empty fixture (skipped above).
-  void scenario;
+  // Type the tool-invoking prompt (literal, then Enter to submit). Falls back
+  // to a Write-tool instruction derived from the trigger when no explicit
+  // prompt is enumerated — every shape SHOULD carry an explicit `prompt`.
+  const prompt =
+    scenario.trigger.prompt ??
+    `Use the ${scenario.trigger.tool} tool with ${JSON.stringify(scenario.trigger.args)}.`;
+  tmux("send-keys", "-t", scenario.id, "-l", prompt);
+  tmux("send-keys", "-t", scenario.id, "Enter");
 }

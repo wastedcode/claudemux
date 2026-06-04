@@ -341,23 +341,46 @@ describe("claude.boot.isReady — dim ghost-placeholder vs real draft (claude 2.
   });
 });
 
-describe("permission-prompt is reserved, NOT emitted in v0.0.1 (ADR 0010 — detection+handling are v0.1)", () => {
-  it("permissionPrompt returns false for everything — including the real 2.1.153 prompt", () => {
-    // Per ADR 0010, detection and handling defer to v0.1 as one unit (a
-    // `respond()` primitive lands with detection). v0.0.1 ships the matcher
-    // empty: a prompt classifies as `unknown` (NOT idle — property #2 floor
-    // holds), and an interactive default-mode session that hits one runs out
-    // its wait() budget → ReplTimeout. Documented fix: a non-interactive
-    // permission mode (README §5). The enumerated shapes are kept in
-    // test/fixtures/ as the v0.1 starting point.
-    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(false);
+describe("permission-prompt detection + handling (one unit per ADR 0010)", () => {
+  it("permissionPrompt requires BOTH the header AND the selectable menu (verified on 2.1.162)", () => {
+    // The real prompt: header `Do you want to <verb> <target>?` + the `❯ 1.`
+    // approval menu. The full 40-row capture means a completed/working turn
+    // could carry the header phrase in scrollback above the box, so the menu
+    // line is the load-bearing disambiguator.
+    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(true);
+
+    // Header WITHOUT the menu — a reply tail ending in the phrase, or a
+    // streaming working frame — must NOT fire (the F-class false positive).
     expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(false);
+    const replyTailThenIdleBox = [
+      "● Done. Do you want to proceed with the next step?",
+      "────────────────────────────",
+      "❯ ", // the empty input box — a COMPLETED turn, not a prompt
+    ].join("\n");
+    expect(claude.rules.permissionPrompt(replyTailThenIdleBox)).toBe(false);
+
+    // Menu WITHOUT the header (a boot dialog shape) — also not a permission
+    // prompt here (and dialogs are classified first anyway).
+    expect(claude.rules.permissionPrompt("❯ 1. Yes, I trust this folder\n  2. No, exit")).toBe(
+      false,
+    );
+    // Prose mentioning the phrase mid-sentence does NOT match (no leading anchor).
+    expect(claude.rules.permissionPrompt("So, do you want to proceed")).toBe(false);
   });
 
-  it("a permission prompt is therefore NOT idle (never mistaken for a completed turn)", () => {
-    // The floor that DOES hold in v0.0.1: a prompt is not the empty input box.
+  it("a permission prompt is NOT idle (never mistaken for a completed turn)", () => {
     expect(claude.boot.isReady(PERMISSION_PROMPT_2_1_153)).toBe(false);
     expect(claude.rules.idle(PERMISSION_PROMPT_2_1_153)).toBe(false);
+  });
+
+  it("respondKey maps each neutral choice to claude's stable menu order (1/2/3)", () => {
+    // 1=Yes (approve once) · 2=Yes, allow all this session · 3=No. Verified
+    // against 2.1.162: a bare digit selects-and-confirms (no Enter).
+    const pp = claude.permissionPrompt;
+    if (!pp) throw new Error("claude.permissionPrompt must be defined");
+    expect(pp.respondKey("approve")).toBe("1");
+    expect(pp.respondKey("approve-for-session")).toBe("2");
+    expect(pp.respondKey("deny")).toBe("3");
   });
 });
 

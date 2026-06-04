@@ -353,7 +353,7 @@ Because a cleanly-down backend server reports `false` for *every* session, all y
 |---|---|
 | `working` | The agent is producing output (streaming, tool calls, spinners). |
 | `idle` | The REPL is ready for input — the ready box is showing and the pane has been stable briefly. |
-| `permission-prompt` | The agent is waiting on a permission decision. **Reserved for v0.1 — not emitted in v0.0.1 (see below).** |
+| `permission-prompt` | The agent is paused on a tool-approval prompt — answer it with `respond()` (see below). |
 | `dialog` | The agent is showing a system dialog (theme picker, trust prompt, etc.). |
 | `unknown` | No predicate fired; consumers must not treat as idle. |
 
@@ -369,11 +369,21 @@ Because a cleanly-down backend server reports `false` for *every* session, all y
 
 `wait()` is the compound owner of the done-decision: it composes the Observer's belief with your patience budget (default 5 minutes; pass `{ timeoutMs }`). Patience is **yours** — claudemux reports the signal, never imposes an idle timeout. (`progress()` is the same belief without the wait — `{ phase, toolInFlight, transcriptCount, hookChannelHealthy, state }`; `hookChannelHealthy: false` means observe degraded to the pane fallback and says so.)
 
-**Permission prompts in v0.0.1.** claudemux owns no configuration — you set claude's permission mode (see §1). v0.0.1 therefore does **not** detect mid-turn tool-approval prompts: the `permission-prompt` state exists in the type but is never emitted, and a prompt classifies as `unknown` (never as `idle` — so it is never mistaken for a finished turn). The consequence: a session left in interactive `default` mode that hits a prompt has no one to answer it, so `wait()` runs out its budget and throws `ReplTimeout`. **Run unattended sessions in a non-interactive permission mode** — e.g. spawn claude with `--permission-mode acceptEdits` (or `bypassPermissions`), or set it in `~/.claude`. v0.1 adds prompt detection together with a `respond()` primitive so you can answer prompts programmatically (and starts emitting the reserved `permission-prompt` state — a non-breaking change for consumers already handling the documented return type).
+**Permission prompts.** claudemux owns no configuration — you set claude's permission mode (see §1). A session left in interactive `default` mode that hits a mid-turn tool-approval prompt (`Do you want to create hello.txt?` → `1. Yes / 2. Yes, allow all… / 3. No`) surfaces it as a first-class state: `state()` reads `permission-prompt`, and `wait()` returns `{ kind: "awaiting", on: "permission-prompt" }` instead of timing out. Answer it with **`respond(choice)`** — `"approve"` (this once), `"approve-for-session"` (allow the rest of the session), or `"deny"`. The natural loop is the analog of `send → wait`:
+
+```ts
+let outcome = await session.wait();
+while (outcome.kind === "awaiting" && outcome.on === "permission-prompt") {
+  await session.respond("approve"); // your policy decision — claudemux never auto-answers
+  outcome = await session.wait();   // wait for the turn to actually finish (or the next prompt)
+}
+```
+
+`respond()` is a mechanism, not policy: choosing *whether* to approve is yours (claudemux never auto-approves an authority grant). It fires the keystroke unconditionally — gate it on a `permission-prompt` reading taken in the same quick sequence (the prompt is stable; it won't resolve underfoot). If you'd rather not field prompts at all, **run unattended sessions in a non-interactive permission mode** — spawn claude with `--permission-mode acceptEdits` (or `bypassPermissions`), or set it in `~/.claude`. (Detection requires the hook + pane observe channels; a denied tool fires no completing hook edge, so the settled idle pane is what tells `wait()` the turn ended — see §6.)
 
 ## 6. Architecture
 
-The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — the lifecycle (`create`/`resume`/`adopt`/`exists`/`kill`/`list`), the per-session verbs (`send`/`wait`/`messagesSince`/`turnComplete`/`state`/`progress`/`interrupt`/`capture`), and the `ask` composer — has no concept of tmux. A future backend (node-pty, anything that satisfies the internal seam) slots in without rewriting `import { create } from "claudemux"`.
+The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — the lifecycle (`create`/`resume`/`adopt`/`exists`/`kill`/`list`), the per-session verbs (`send`/`wait`/`messagesSince`/`turnComplete`/`state`/`progress`/`interrupt`/`respond`/`capture`), and the `ask` composer — has no concept of tmux. A future backend (node-pty, anything that satisfies the internal seam) slots in without rewriting `import { create } from "claudemux"`.
 
 **Read/write split.** The substrate *drives* via the write surface (tmux send-keys/paste) but *observes* via reliable channels: the agent's lifecycle **hooks** (injected at spawn → a per-session rendezvous file) + the on-disk **transcript**, with the pane as a marked fallback. Four small seams compose it:
 

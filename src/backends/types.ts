@@ -32,7 +32,7 @@ export interface BackendEvent {
  */
 export type SendPayload =
   | { kind: "paste"; text: string }
-  | { kind: "key"; key: "Enter" | "Escape" | "1" | "2" | "y" | "n" };
+  | { kind: "key"; key: "Enter" | "Escape" | "1" | "2" | "3" | "y" | "n" };
 
 /**
  * Identifier for one named session. Every Backend method takes this shape

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SendPayload } from "../backends/types.js";
+import { PromptResponseUnsupported } from "../errors.js";
 import { DELIVERY_UNCONFIRMED, makeHandle } from "./handle.js";
 
 const ctx = claude.transcript;
@@ -177,6 +178,57 @@ describe("send() → cursor anchoring", () => {
     // A count cursor here ("0") would later slice the whole transcript — the
     // sentinel is detectable and reads empty instead (F40).
     expect(await h.send("hello")).toBe(DELIVERY_UNCONFIRMED);
+  });
+});
+
+describe("respond() → permission-prompt answer (S5)", () => {
+  const txAgent = (tx: string): AgentDef => ({
+    name: claude.name,
+    buildArgv: claude.buildArgv,
+    boot: claude.boot,
+    rules: claude.rules,
+    permissionPrompt: { respondKey: (c) => (c === "approve" ? "1" : c === "deny" ? "3" : "2") },
+    transcript: { locate: () => tx, parseLine, isTurnStart },
+  });
+
+  it("fires the digit the agent maps each neutral choice to (approve→1, session→2, deny→3)", async () => {
+    const keys: string[] = [];
+    const recording: Backend = {
+      ...noopBackend(),
+      send: async (_ref, payload: SendPayload) => {
+        if (payload.kind === "key") keys.push(payload.key);
+      },
+    };
+    const h = makeHandle({
+      backend: recording,
+      agent: txAgent("/nope.jsonl"),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    await h.respond("approve");
+    await h.respond("approve-for-session");
+    await h.respond("deny");
+    // No Enter is appended — a bare digit selects-and-confirms on claude 2.1.162.
+    expect(keys).toEqual(["1", "2", "3"]);
+  });
+
+  it("throws PromptResponseUnsupported for an agent that declares no menu mapping", async () => {
+    const agentNoPrompt: AgentDef = {
+      name: "codex-ish",
+      buildArgv: claude.buildArgv,
+      boot: claude.boot,
+      rules: claude.rules,
+      // no permissionPrompt mapping
+    };
+    const h = makeHandle({
+      backend: noopBackend(),
+      agent: agentNoPrompt,
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    await expect(h.respond("approve")).rejects.toBeInstanceOf(PromptResponseUnsupported);
   });
 });
 

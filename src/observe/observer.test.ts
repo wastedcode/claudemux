@@ -95,6 +95,33 @@ describe("believe — the one fused belief (state()/progress()/wait() defer to i
     expect(b.interrupted).toBe(true);
   });
 
+  it("a DENIED tool leaves a dangling tool-start, but a settled idle pane wins (S5/F49)", () => {
+    // The deny path: PreToolUse fired `tool-start`, the consumer chose "No", so
+    // the tool never ran → NO `tool-end`, NO `stop`. The hook phase is stuck at
+    // `tool` (→ working) forever though the turn is over. The pane is the ground
+    // truth — a real in-flight tool shows the spinner, not the idle box — so a
+    // clean idle pane overrides the stuck hook 'working'.
+    const b = believe({
+      edges: [edge("prompt-submit", 1), edge("tool-start", 2)],
+      transcriptCount: 2,
+      pane: pane("idle"),
+    });
+    expect(b.phase).toBe("tool"); // the raw hook progress is unchanged (tool still "open")
+    expect(b.toolInFlight).toBe(true);
+    expect(b.state).toBe("idle"); // …but the fused state trusts the settled pane
+  });
+
+  it("a GENUINELY in-flight tool (pane shows the spinner) stays working — no false idle", () => {
+    // The guard must not fire on a real tool: the pane is 'working' (or unknown),
+    // never the idle box, so the hook 'working' stands.
+    const b = believe({
+      edges: [edge("prompt-submit", 1), edge("tool-start", 2)],
+      transcriptCount: 2,
+      pane: pane("working"),
+    });
+    expect(b.state).toBe("working");
+  });
+
   it("a lingering 'Interrupted' during a NEW working turn does NOT count as aborted", () => {
     const b = believe({
       edges: [edge("prompt-submit", 3)],

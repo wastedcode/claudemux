@@ -8,6 +8,7 @@ import { interruptCli } from "./interrupt.js";
 import { killCli } from "./kill.js";
 import { listCli } from "./list.js";
 import { messagesCli } from "./messages.js";
+import { respondCli } from "./respond.js";
 import { type ResumeCliOpts, resumeCli } from "./resume.js";
 import { sendCli } from "./send.js";
 import { type SpawnCliOpts, spawnCli } from "./spawn.js";
@@ -96,6 +97,12 @@ export function buildProgram(): Command {
     .description("fire ESC at the session to stop a working agent (harmless when idle)")
     .action(async (name: string, opts: CommonOpts) => {
       await interruptCli(name, opts);
+    });
+
+  withAgent(program.command("respond <name> <choice>"))
+    .description("answer a permission prompt: choice = approve | approve-for-session | deny")
+    .action(async (name: string, choice: string, opts: CommonOpts) => {
+      await respondCli(name, choice, opts);
     });
 
   withAgent(program.command("wait <name>"))
