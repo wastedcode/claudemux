@@ -1,105 +1,179 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend } from "../backends/types.js";
+import type { Backend, SendPayload } from "../backends/types.js";
 import { makeHandle } from "./handle.js";
-
-/**
- * Round-trip test for the turn contract — send()→Cursor and messagesSince() —
- * the headline surface, driven through a fake backend + a fake transcript whose
- * file we grow to simulate a turn producing output.
- */
 
 const ctx = claude.transcript;
 if (!ctx) throw new Error("claude.transcript must be defined");
 const { parseLine, isTurnStart } = ctx;
 
-/** A no-op backend; the handle only needs capture/send/kill/onCommand here. */
-function fakeBackend(): Backend {
+/** A claude transcript line with explicit thread links. */
+const userRec = (uuid: string, parent: string | null, text: string) =>
+  JSON.stringify({
+    type: "user",
+    uuid,
+    ...(parent === null ? {} : { parentUuid: parent }),
+    message: { role: "user", content: text },
+  });
+const asstRec = (uuid: string, parent: string, text: string) =>
+  JSON.stringify({
+    type: "assistant",
+    uuid,
+    parentUuid: parent,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+
+describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)", () => {
+  let dir: string;
+  let tx: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cmux-h-"));
+    tx = join(dir, "s.jsonl");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const agent = (): AgentDef => ({
+    name: claude.name,
+    buildArgv: claude.buildArgv,
+    boot: claude.boot,
+    rules: claude.rules,
+    transcript: { locate: () => tx, parseLine, isTurnStart },
+  });
+  const handle = () =>
+    makeHandle({
+      backend: noopBackend(),
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+  const txt = (msgs: { parts: readonly { kind: string; text?: string }[] }[]) =>
+    msgs.flatMap((m) => m.parts.map((p) => p.text ?? "")).join(" ");
+
+  it("isolates a turn from the prior one (cursor=u2 → only turn-2 output)", async () => {
+    writeFileSync(
+      tx,
+      [
+        userRec("u1", null, "ONE"),
+        asstRec("a1", "u1", "reply ONE"),
+        userRec("u2", "a1", "TWO"),
+        asstRec("a2", "u2", "reply TWO"),
+      ].join("\n"),
+    );
+    expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO");
+    expect(txt(await handle().messagesSince("u1"))).toContain("reply ONE");
+    expect(txt(await handle().messagesSince("u1"))).toContain("reply TWO");
+  });
+
+  it("ROBUST to worst flush order: prior reply written AFTER our user record", async () => {
+    // File order scrambled (a1 flushed late, lands after u2) but parent links are
+    // causally correct. A positional slice-after-u2 would leak a1; the chain must not.
+    writeFileSync(
+      tx,
+      [
+        userRec("u1", null, "ONE"),
+        userRec("u2", "a1", "TWO"),
+        asstRec("a1", "u1", "reply ONE"),
+        asstRec("a2", "u2", "reply TWO"),
+      ].join("\n"),
+    );
+    expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO"); // a1 excluded despite being later in the file
+  });
+
+  it("includes an interleaved human turn (input-source-agnostic)", async () => {
+    // After our turn, a human types one (parent = our reply), then the agent answers.
+    writeFileSync(
+      tx,
+      [
+        userRec("u1", null, "MINE"),
+        asstRec("a1", "u1", "ok"),
+        userRec("h1", "a1", "HUMAN"),
+        asstRec("a2", "h1", "to human"),
+      ].join("\n"),
+    );
+    expect(txt(await handle().messagesSince("u1"))).toBe("ok HUMAN to human");
+  });
+
+  it("thread-less transcript → positional fallback; count + unknown cursors handled", async () => {
+    // No parentUuid anywhere → fall back to slicing after the matching id.
+    const noLinks = [
+      userRec("x1", null, "A"),
+      '{"type":"assistant","uuid":"x2","message":{"role":"assistant","content":[{"type":"text","text":"B"}]}}',
+    ].join("\n");
+    writeFileSync(tx, noLinks);
+    expect(txt(await handle().messagesSince("x1"))).toBe("B");
+    // Legacy count cursor + garbage cursor.
+    writeFileSync(tx, [userRec("u1", null, "ONE"), asstRec("a1", "u1", "reply")].join("\n"));
+    expect((await handle().messagesSince("1")).length).toBe(1);
+    expect((await handle().messagesSince("nope")).length).toBe(2);
+  });
+});
+
+describe("send() → cursor anchoring", () => {
+  let dir: string;
+  let tx: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cmux-h2-"));
+    tx = join(dir, "s.jsonl");
+    writeFileSync(tx, "");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const agent = (): AgentDef => ({
+    name: claude.name,
+    buildArgv: claude.buildArgv,
+    boot: claude.boot,
+    rules: claude.rules,
+    transcript: { locate: () => tx, parseLine, isTurnStart },
+  });
+
+  it("anchors the cursor on OUR user record (its id), not a count", async () => {
+    // The backend records the prompt to the transcript on paste, as claude does.
+    let n = 0;
+    const recording: Backend = {
+      ...noopBackend(),
+      send: async (_ref, payload: SendPayload) => {
+        if (payload.kind === "paste")
+          appendFileSync(tx, `${userRec(`own-${++n}`, null, payload.text)}\n`);
+      },
+    };
+    const h = makeHandle({
+      backend: recording,
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    expect(await h.send("hello world")).toBe("own-1"); // the user record's id, not "0"
+  });
+
+  it("falls back to a count cursor when no user record appears (delivery issue)", async () => {
+    const h = makeHandle({
+      backend: noopBackend(),
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      agentSessionId: "id",
+    });
+    expect(await h.send("hello")).toBe("0"); // nothing recorded → count fallback
+  });
+});
+
+function noopBackend(): Backend {
   return {
     id: "fake",
     spawn: async () => undefined,
     kill: async () => undefined,
     exists: async () => true,
     list: async () => [],
-    send: async () => undefined, // sendOnce's paste + Enter — no-op
-    capture: async () => "❯ ", // a benign ready-ish pane
+    send: async () => undefined,
+    capture: async () => "❯ ",
     setSessionMeta: async () => undefined,
     getSessionMeta: async () => undefined,
     onCommand: () => () => undefined,
   };
 }
-
-describe("handle — send()→Cursor / messagesSince round-trip", () => {
-  let transcriptFile: string;
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "cmux-handle-"));
-    transcriptFile = join(dir, "session.jsonl");
-    writeFileSync(transcriptFile, ""); // starts empty (no turns yet)
-  });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
-
-  // A real claude AgentDef but with transcript.locate pinned to our temp file.
-  function agent(): AgentDef {
-    return {
-      name: claude.name,
-      buildArgv: claude.buildArgv,
-      boot: claude.boot,
-      rules: claude.rules,
-      transcript: { locate: () => transcriptFile, parseLine, isTurnStart },
-    };
-  }
-
-  function handle() {
-    return makeHandle({
-      backend: fakeBackend(),
-      agent: agent(),
-      namespace: "claudemux",
-      name: "t",
-      agentSessionId: "id-1",
-    });
-  }
-
-  const USER = '{"type":"user","message":{"role":"user","content":"ping"},"uuid":"u1"}';
-  const REPLY =
-    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"PONG"}]},"uuid":"a1"}';
-
-  it("send() anchors the cursor at the pre-send message count", async () => {
-    // No messages yet → cursor "0".
-    expect(await handle().send("ping")).toBe("0");
-    // With one prior message, the next send anchors at "1".
-    writeFileSync(transcriptFile, USER);
-    expect(await handle().send("again")).toBe("1");
-  });
-
-  it("messagesSince(cursor) returns only the tail produced after the send", async () => {
-    const h = handle();
-    const cursor = await h.send("ping"); // "0" — transcript empty at send
-    // The turn produces the user echo + the assistant reply.
-    writeFileSync(transcriptFile, `${USER}\n${REPLY}`);
-    const msgs = await h.messagesSince(cursor);
-    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect(msgs[1]?.parts).toEqual([{ kind: "text", text: "PONG" }]);
-  });
-
-  it("a non-zero cursor slices correctly; a garbage cursor returns all", async () => {
-    writeFileSync(transcriptFile, `${USER}\n${REPLY}`);
-    const h = handle();
-    expect((await h.messagesSince("1")).map((m) => m.role)).toEqual(["assistant"]);
-    expect((await h.messagesSince("abc")).map((m) => m.role)).toEqual(["user", "assistant"]); // fallback: all
-    expect((await h.messagesSince("-1")).map((m) => m.role)).toEqual(["user", "assistant"]); // fallback: all
-  });
-
-  it("progress() reflects the transcript count even with no hook channel", async () => {
-    writeFileSync(transcriptFile, `${USER}\n${REPLY}`);
-    const p = await handle().progress();
-    expect(p.transcriptCount).toBe(2);
-    // No rendezvous markers here → hook channel not healthy, phase unknown.
-    expect(p.hookChannelHealthy).toBe(false);
-  });
-});

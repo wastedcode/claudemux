@@ -346,8 +346,15 @@ function parseTranscriptLine(line: string): Message | null {
   if (parts.length === 0) return null;
 
   const id = typeof rec.uuid === "string" ? rec.uuid : "";
+  const parentId = typeof rec.parentUuid === "string" ? rec.parentUuid : undefined;
   const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined;
-  return { id, role: type, parts, ...(at === undefined ? {} : { at }) };
+  return {
+    id,
+    role: type,
+    parts,
+    ...(parentId === undefined ? {} : { parentId }),
+    ...(at === undefined ? {} : { at }),
+  };
 }
 
 /**

@@ -391,3 +391,23 @@ false-positives); the activity-OR `count` branch (→ `transcriptCount`).
 - **`Cursor` is a bare count string today**, not the planned nonce anchor — rapid multi-send
   attribution is unsolved (fine for Posse's one-kickoff-per-session; verify before relying
   on it for a multi-send managed session).
+
+## 11. Parallel-first (scale constraint — founder: "expect a lot of parallel sessions")
+
+claudemux must be correct AND efficient with many concurrent sessions.
+
+- **Parallel-safe by construction (correctness):** each session has its own transcript +
+  rendezvous file (keyed by session id), its own per-handle mutex, and there is **zero
+  shared/global state**. N sessions = N independent file sets; cursors are per-session. No
+  cross-talk. The cursor fix (causal-chain `messagesSince`) is per-session.
+- **The scale cost is polling I/O, not correctness:** `progress()`/`messagesSince()` (and the
+  `send` anchor poll) re-read + reparse the whole transcript/rendezvous per call — O(file) per
+  poll, per session. Frequent polling across many sessions is the real cost. **Fix = the
+  emit-first `subscribe()` (push, not poll) + incremental byte-offset reads** (tail only new
+  bytes since a remembered offset). Do NOT ship the poll model as the endpoint at scale.
+- **Boot is the amplified weak spot:** N parallel boots = N pane-scrapes, and boot readiness is
+  the fragile residual (the `[C]` acceptance flake — `ReplTimeout` on the flaky `❯` rendering).
+  Scale makes flaky boot more likely → boot hardening (pre-trust + `SessionStart`-as-ready,
+  §9) matters more, not less, under parallelism.
+- **Resource floor:** N sessions = N claude processes + N tmux panes — inherent to "real
+  sessions"; claudemux adds only the per-session files on top.

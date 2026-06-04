@@ -7,6 +7,7 @@ import { waitForState } from "../io/wait.js";
 import { observeProgress, readMessages } from "../observe/observer.js";
 import { classify } from "../state/classifier.js";
 import type { BackendCommandEvent, Message, ReadyOpts, SessionHandle, State } from "../types.js";
+import { sleep } from "../util/sleep.js";
 import { CLASSIFIER_BOTTOM_N } from "./constants.js";
 import { rendezvousPathFor } from "./hooks.js";
 import { Mutex } from "./mutex.js";
@@ -46,16 +47,22 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
     send: (text) =>
       mutex.run(async () => {
-        // Anchor the cursor BEFORE delivery so messagesSince() returns this
-        // turn's output (a count into the append-only transcript).
-        const cursor = String(transcriptMessages(deps).length);
+        const before = transcriptMessages(deps);
+        const beforeIds = new Set(before.map((m) => m.id));
         await sendOnce(deps.backend, deps.agent, ref, text);
-        return cursor;
+        // Anchor the cursor on OUR OWN user record, not a positional count.
+        // A count read here is wrong: the PRIOR turn's reply may not have flushed
+        // yet (the transcript trails the done signal by ~100ms), and a human may
+        // type an interleaved turn. Anchoring on the record this send produced is
+        // immune to both. Fall back to a count only if it never appears.
+        const ownId = await anchorOwnTurn(deps, beforeIds, text);
+        return ownId ?? String(before.length);
       }),
     messagesSince: (cursor) =>
       mutex.run(async () => {
         const all = transcriptMessages(deps);
-        const n = Number.parseInt(cursor, 10);
+        if (all.some((m) => m.id === cursor)) return descendantsOf(all, cursor);
+        const n = Number.parseInt(cursor, 10); // legacy / delivery-unconfirmed fallback
         return Number.isFinite(n) && n >= 0 ? all.slice(n) : all;
       }),
     progress: () =>
@@ -95,6 +102,62 @@ function transcriptPath(deps: HandleDeps): string | undefined {
 function transcriptMessages(deps: HandleDeps): Message[] {
   const path = transcriptPath(deps);
   return path === undefined ? [] : readMessages({ agent: deps.agent, transcriptPath: path });
+}
+
+/**
+ * Messages causally after `ancestorId` — those whose parent chain passes through
+ * it — in file order. Uses the thread links, not file position, so the prior
+ * turn's late-flushing reply (which descends from an EARLIER user record) is
+ * excluded even if it lands after our record in the append-only file. Records
+ * with no parent chain (e.g. an agent that omits `parentId`) fall back to a
+ * positional slice so a thread-less transcript still works.
+ */
+function descendantsOf(all: Message[], ancestorId: string): Message[] {
+  const parentOf = new Map(all.map((m) => [m.id, m.parentId]));
+  const hasLinks = all.some((m) => m.parentId !== undefined);
+  if (!hasLinks) {
+    const idx = all.findIndex((m) => m.id === ancestorId);
+    return idx >= 0 ? all.slice(idx + 1) : all;
+  }
+  const descends = (id: string): boolean => {
+    const seen = new Set<string>();
+    let cur = parentOf.get(id);
+    while (cur !== undefined && !seen.has(cur)) {
+      if (cur === ancestorId) return true;
+      seen.add(cur);
+      cur = parentOf.get(cur);
+    }
+    return false;
+  };
+  return all.filter((m) => descends(m.id));
+}
+
+const ANCHOR_POLLS = 12;
+const ANCHOR_POLL_MS = 250;
+/** Collapse whitespace so a reflowed/echoed prompt still matches. */
+const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+/**
+ * The id of the user record THIS send produced — a NEW (not pre-existing) user
+ * message whose text matches what we sent. Polled because the record flushes
+ * shortly after delivery; `undefined` if it never appears (a delivery problem).
+ */
+async function anchorOwnTurn(
+  deps: HandleDeps,
+  beforeIds: Set<string>,
+  text: string,
+): Promise<string | undefined> {
+  const needle = squash(text).slice(0, 80); // prefix tolerates echo reflow / truncation
+  for (let attempt = 0; attempt < ANCHOR_POLLS; attempt++) {
+    const msgs = transcriptMessages(deps);
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m === undefined || m.role !== "user" || beforeIds.has(m.id)) continue;
+      if (m.parts.some((p) => p.kind === "text" && squash(p.text).includes(needle))) return m.id;
+    }
+    await sleep(ANCHOR_POLL_MS);
+  }
+  return undefined;
 }
 
 async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Promise<State> {

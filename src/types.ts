@@ -32,6 +32,12 @@ export type IdleState = Extract<State, "idle" | "permission-prompt" | "dialog">;
 export interface Message {
   /** Stable per-message id (addressable for streaming dedup / update-in-place). */
   readonly id: string;
+  /**
+   * Id of this message's parent in the conversation thread, when the agent
+   * records one. Lets `messagesSince` follow causal order rather than file
+   * order — robust to the transcript flushing records slightly out of sequence.
+   */
+  readonly parentId?: string;
   readonly role: "user" | "assistant";
   readonly parts: readonly MessagePart[];
   /** ISO timestamp, when the agent records one. */
