@@ -187,3 +187,25 @@ Empirically settled (2026-06-04, isolated socket, 3/3):
   "dialogs done + REPL up."
 - Net: boot readiness stops being a screen-scrape. tmux is the WRITE surface + a dialog/
   unknown-modal fallback, never the primary read for "is it ready."
+
+## VERIFIED: resume, MCP-readiness, jsonl timing (boot edge cases, founder-prompted)
+
+Empirical (2026-06-04, isolated socket) + Anthropic docs:
+
+- **Resume: SessionStart-as-ready HOLDS.** `SessionStart` fires on `--resume` with
+  **`source:"resume"`** (docs: source ∈ startup|resume|clear|compact; payload carries source +
+  transcript_path). Sending IMMEDIATELY after it landed AND the model recalled a planted secret —
+  2/2 trials. Posse's F24 bridge-quiet scar was their **MCP-push channel** (a different mechanism
+  than send-keys); not reproduced here. **Caveat: N=2** → keep R7 (resume-settle: wait transcript-
+  mtime quiet ~2s, bounded) as cheap belt-and-braces given the scar. Use `source` to flag `resumed`
+  so consumers expect the history re-print.
+- **MCP is NOT guaranteed loaded at SessionStart — but claude handles it.** Servers connect async;
+  SessionStart fires first. Docs (mcp.md): a turn needing a still-connecting server **waits** for it
+  inside `ToolSearch` (default-on). So an immediate MCP-using turn blocks, never fails → **do NOT
+  gate readiness on MCP**. (A *failed* server = consumer config, separate.)
+- **jsonl is lazy — confirms SessionStart is the only fresh-boot signal.** NEW session: no
+  `.jsonl` until the first user input (empirical + docs). So there is no transcript to read for
+  fresh-boot readiness — `SessionStart` is it. RESUME: the file exists and appends to the SAME id;
+  `--fork-session` makes a new id/file.
+- **Docs status:** SessionStart `source` + lazy-transcript = documented; MCP-vs-SessionStart timing
+  + resume grace-period = SILENT (hence the on-box verification).
