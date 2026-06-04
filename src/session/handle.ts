@@ -3,12 +3,25 @@ import type { Backend, SessionRef } from "../backends/types.js";
 import { interruptOnce } from "../io/interrupt.js";
 import { sendOnce } from "../io/send.js";
 import { stabilize } from "../io/stabilize.js";
-import { waitForState } from "../io/wait.js";
-import { observeProgress, readMessages } from "../observe/observer.js";
+import { waitForOutcome } from "../io/wait.js";
+import {
+  type Belief,
+  assembleBelief,
+  readMessages,
+  readThread,
+  resolveTranscriptPath,
+} from "../observe/observer.js";
 import { classify } from "../state/classifier.js";
-import type { BackendCommandEvent, Message, ReadyOpts, SessionHandle, State } from "../types.js";
+import type {
+  BackendCommandEvent,
+  Message,
+  Progress,
+  ReadyOpts,
+  SessionHandle,
+  TurnOutcome,
+} from "../types.js";
 import { sleep } from "../util/sleep.js";
-import { CLASSIFIER_BOTTOM_N } from "./constants.js";
+import { CLASSIFIER_CAPTURE } from "./constants.js";
 import { rendezvousPathFor } from "./hooks.js";
 import { Mutex } from "./mutex.js";
 
@@ -40,6 +53,11 @@ interface HandleDeps {
 export function makeHandle(deps: HandleDeps): SessionHandle {
   const ref: SessionRef = { namespace: deps.namespace, name: deps.name };
   const mutex = new Mutex();
+  // Authoritative session-interaction state: this handle issued an `interrupt()`
+  // not yet superseded by a `send()`. An interrupt fires no `stop` edge and
+  // leaves the spinner's "esc to interrupt" frozen in scrollback, so neither
+  // the hook nor the pane can tell aborted from working — but the handle knows.
+  let interruptPending = false;
 
   return {
     name: deps.name,
@@ -47,6 +65,7 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
     ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
     send: (text) =>
       mutex.run(async () => {
+        interruptPending = false; // a new turn supersedes any pending interrupt
         const before = transcriptMessages(deps);
         const beforeIds = new Set(before.map((m) => m.id));
         await sendOnce(deps.backend, deps.agent, ref, text);
@@ -58,27 +77,48 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         const ownId = await anchorOwnTurn(deps, beforeIds, text);
         return ownId ?? String(before.length);
       }),
-    messagesSince: (cursor) =>
-      mutex.run(async () => {
-        const all = transcriptMessages(deps);
-        if (all.some((m) => m.id === cursor)) return descendantsOf(all, cursor);
-        const n = Number.parseInt(cursor, 10); // legacy / delivery-unconfirmed fallback
-        return Number.isFinite(n) && n >= 0 ? all.slice(n) : all;
-      }),
+    messagesSince: (cursor) => mutex.run(async () => messagesSince(deps, cursor)),
+    turnComplete: (cursor) =>
+      mutex.run(async () => messagesSince(deps, cursor).some((m) => m.role === "assistant")),
     progress: () =>
       mutex.run(async () => {
+        const b = await readBelief(deps, ref, interruptPending);
+        // Project the belief to the public Progress; the extra belief fields
+        // (interrupted / edge timings) are wait()'s concern, not progress()'s.
+        const { phase, toolInFlight, transcriptCount, hookChannelHealthy, state } = b;
+        return {
+          phase,
+          toolInFlight,
+          transcriptCount,
+          hookChannelHealthy,
+          state,
+        } satisfies Progress;
+      }),
+    interrupt: () =>
+      mutex.run(async () => {
+        interruptPending = true; // authoritative: we aborted; no `stop` will come
+        await interruptOnce(deps.backend, ref);
+      }),
+    wait: (opts?: ReadyOpts) =>
+      mutex.run(() => {
+        // We issued an interrupt and haven't sent since — there is no turn to
+        // wait for; report the abort rather than poll a frozen spinner to budget.
+        if (interruptPending) return Promise.resolve<TurnOutcome>({ kind: "aborted" });
         const rv = rendezvousPath(deps);
         const tp = transcriptPath(deps);
-        return observeProgress({
-          agent: deps.agent,
-          ...(rv === undefined ? {} : { rendezvousPath: rv }),
-          ...(tp === undefined ? {} : { transcriptPath: tp }),
-        });
+        return waitForOutcome(
+          deps.backend,
+          deps.agent,
+          ref,
+          {
+            ...(rv === undefined ? {} : { rendezvousPath: rv }),
+            ...(tp === undefined ? {} : { transcriptPath: tp }),
+          },
+          opts ?? {},
+          { stabilize },
+        );
       }),
-    interrupt: () => mutex.run(() => interruptOnce(deps.backend, ref)),
-    wait: (opts?: ReadyOpts) =>
-      mutex.run(() => waitForState(deps.backend, deps.agent, ref, opts ?? {}, { stabilize })),
-    state: () => mutex.run(() => readState(deps.backend, deps.agent, ref)),
+    state: () => mutex.run(async () => (await readBelief(deps, ref, interruptPending)).state),
     capture: (opts) => mutex.run(() => deps.backend.capture(ref, opts)),
     kill: () => mutex.run(() => deps.backend.kill(ref)),
     onBackendCommand: (handler: (event: BackendCommandEvent) => void) =>
@@ -92,16 +132,48 @@ function rendezvousPath(deps: HandleDeps): string | undefined {
   return deps.agentSessionId === undefined ? undefined : rendezvousPathFor(deps.agentSessionId);
 }
 
-/** The agent's transcript file for this session, when locatable. */
+/**
+ * The agent's transcript file for this session, when locatable. Prefers the
+ * authoritative path the hook reported (via the Observer) over the fragile glob.
+ */
 function transcriptPath(deps: HandleDeps): string | undefined {
-  if (deps.agent.transcript === undefined || deps.agentSessionId === undefined) return undefined;
-  return deps.agent.transcript.locate({ agentSessionId: deps.agentSessionId }) ?? undefined;
+  const rv = rendezvousPath(deps);
+  return (
+    resolveTranscriptPath({
+      agent: deps.agent,
+      ...(rv === undefined ? {} : { rendezvousPath: rv }),
+      ...(deps.agentSessionId === undefined ? {} : { agentSessionId: deps.agentSessionId }),
+    }) ?? undefined
+  );
 }
 
 /** All messages in the session transcript, or `[]` when it can't be located. */
 function transcriptMessages(deps: HandleDeps): Message[] {
   const path = transcriptPath(deps);
   return path === undefined ? [] : readMessages({ agent: deps.agent, transcriptPath: path });
+}
+
+/**
+ * The messages produced since `cursor` — the shared body of `messagesSince` and
+ * `turnComplete`. Causal-chain when the cursor is a real message id; positional /
+ * count fallback for a legacy or delivery-unconfirmed cursor.
+ */
+function messagesSince(deps: HandleDeps, cursor: string): Message[] {
+  const { messages: all, parentOf } = transcriptThread(deps);
+  if (all.some((m) => m.id === cursor)) return descendantsOf(all, parentOf, cursor);
+  const n = Number.parseInt(cursor, 10); // legacy / delivery-unconfirmed fallback
+  return Number.isFinite(n) && n >= 0 ? all.slice(n) : all;
+}
+
+/** Messages + the full ancestry graph (bridges non-message records), or empty. */
+function transcriptThread(deps: HandleDeps): {
+  messages: Message[];
+  parentOf: Map<string, string | undefined>;
+} {
+  const path = transcriptPath(deps);
+  return path === undefined
+    ? { messages: [], parentOf: new Map() }
+    : readThread({ agent: deps.agent, transcriptPath: path });
 }
 
 /**
@@ -112,9 +184,17 @@ function transcriptMessages(deps: HandleDeps): Message[] {
  * with no parent chain (e.g. an agent that omits `parentId`) fall back to a
  * positional slice so a thread-less transcript still works.
  */
-function descendantsOf(all: Message[], ancestorId: string): Message[] {
-  const parentOf = new Map(all.map((m) => [m.id, m.parentId]));
-  const hasLinks = all.some((m) => m.parentId !== undefined);
+function descendantsOf(
+  all: Message[],
+  fullParentOf: Map<string, string | undefined>,
+  ancestorId: string,
+): Message[] {
+  // Prefer the FULL ancestry graph (every record, incl. the non-message ones an
+  // agent threads between a prompt and its reply). Without it — an agent with no
+  // `parseEdge` — fall back to links between surfaced messages only.
+  const parentOf =
+    fullParentOf.size > 0 ? fullParentOf : new Map(all.map((m) => [m.id, m.parentId]));
+  const hasLinks = [...parentOf.values()].some((p) => p !== undefined);
   if (!hasLinks) {
     const idx = all.findIndex((m) => m.id === ancestorId);
     return idx >= 0 ? all.slice(idx + 1) : all;
@@ -160,9 +240,33 @@ async function anchorOwnTurn(
   return undefined;
 }
 
-async function readState(backend: Backend, agent: AgentDef, ref: SessionRef): Promise<State> {
-  const text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
-  return classify(text, agent.rules);
+/**
+ * Read the one fused {@link Belief} — the single owner `state()`/`progress()`
+ * defer to. Captures + classifies the pane, then fuses with the hook edges +
+ * transcript via {@link assembleBelief}. A capture failure is **not** swallowed:
+ * in tmux a failed capture means the session/server is gone (a terminal
+ * condition), so the typed `SessionGone`/`BackendUnreachable` propagates — the
+ * caller asked about a session that no longer exists, and should hear so.
+ */
+async function readBelief(
+  deps: HandleDeps,
+  ref: SessionRef,
+  weInterrupted: boolean,
+): Promise<Belief> {
+  const text = await deps.backend.capture(ref, CLASSIFIER_CAPTURE);
+  const pane = {
+    state: classify(text, deps.agent.rules),
+    interrupted: deps.agent.rules.interrupted?.(text) ?? false,
+  };
+  const rv = rendezvousPath(deps);
+  const tp = transcriptPath(deps);
+  return assembleBelief({
+    agent: deps.agent,
+    ...(rv === undefined ? {} : { rendezvousPath: rv }),
+    ...(tp === undefined ? {} : { transcriptPath: tp }),
+    pane,
+    weInterrupted,
+  });
 }
 
 /**

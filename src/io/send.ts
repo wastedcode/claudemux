@@ -1,6 +1,6 @@
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { CLASSIFIER_BOTTOM_N } from "../session/constants.js";
+import { CLASSIFIER_CAPTURE } from "../session/constants.js";
 import { captureSendBaseline, writeSendBaseline } from "./baseline.js";
 
 /**
@@ -38,7 +38,7 @@ export async function sendOnce(
   // baseline is simply not recorded and wait falls back to working-arm.
   let pre: string | undefined;
   try {
-    pre = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+    pre = await backend.capture(ref, CLASSIFIER_CAPTURE);
   } catch {
     pre = undefined;
   }

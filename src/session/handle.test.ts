@@ -111,6 +111,21 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
     expect((await handle().messagesSince("1")).length).toBe(1);
     expect((await handle().messagesSince("nope")).length).toBe(2);
   });
+
+  it("turnComplete: true when a reply descends from the cursor, false for a DANGLING turn (S2/F20)", async () => {
+    // A completed turn: user → assistant.
+    writeFileSync(tx, [userRec("u1", null, "ASK"), asstRec("a1", "u1", "REPLY")].join("\n"));
+    expect(await handle().turnComplete("u1")).toBe(true);
+    // A crashed/in-flight turn: the prompt is recorded with NO assistant reply.
+    writeFileSync(
+      tx,
+      [userRec("u1", null, "DONE"), asstRec("a1", "u1", "ok"), userRec("u2", "a1", "ESSAY")].join(
+        "\n",
+      ),
+    );
+    expect(await handle().turnComplete("u2")).toBe(false); // → the consumer re-sends u2
+    expect(await handle().turnComplete("u1")).toBe(true); // the earlier turn DID complete
+  });
 });
 
 describe("send() → cursor anchoring", () => {

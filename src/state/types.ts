@@ -11,4 +11,11 @@ export interface ClassifierRules {
   working(text: string): boolean;
   /** True when the REPL is idle and ready for input. */
   idle(text: string): boolean;
+  /**
+   * True when the pane shows a turn that was **interrupted** (ESC) rather than
+   * completed — a state only the pane sees (interrupt fires no `stop` hook).
+   * Optional: agents that can't distinguish it simply omit it. The Observer
+   * maps it to a `TurnOutcome` of `aborted`.
+   */
+  interrupted?(text: string): boolean;
 }

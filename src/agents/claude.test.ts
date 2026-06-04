@@ -216,6 +216,31 @@ describe("claude.buildArgv — explicit id conflicting with an extraArgs identit
   });
 });
 
+describe("claude.buildArgv — neutral resume (resumeFrom → --resume, owned here)", () => {
+  it("maps resumeFrom to `--resume <id>` as TWO adjacent argv elements, surfaces the id", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", resumeFrom: UUID });
+    expect(r.argv).toEqual(["--resume", UUID]); // two elements, never joined
+    expect(r.argv.some((a) => a.startsWith("--resume="))).toBe(false);
+    expect(r.agentSessionId).toBe(UUID);
+  });
+
+  it("threads extraArgs after the resume flag", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", resumeFrom: UUID, extraArgs: ["--verbose"] });
+    expect(r.argv).toEqual(["--resume", UUID, "--verbose"]);
+  });
+
+  it("resumeFrom + a co-present extraArgs identity flag is choosing the id twice → conflict", () => {
+    expect(() =>
+      claude.buildArgv({
+        cwd: "/tmp",
+        resumeFrom: UUID,
+        sessionName: "claudemux/job",
+        extraArgs: ["--resume", UUID2],
+      }),
+    ).toThrow(AgentSessionIdConflict);
+  });
+});
+
 describe("claude.boot.dialogs (claude 2.1.153)", () => {
   it("theme-picker matches + responds Enter", () => {
     const d = claude.boot.dialogs.find((x) => x.id === "theme-picker");
@@ -271,6 +296,48 @@ describe("claude.boot.isReady — empty-input-box on real 2.1.153 panes", () => 
   it("rejects a working pane and an empty pane", () => {
     expect(claude.boot.isReady(WORKING_PANE_2_1_153)).toBe(false);
     expect(claude.boot.isReady("")).toBe(false);
+  });
+});
+
+/**
+ * ANSI fixtures captured VERBATIM from authenticated claude 2.1.162 (spike,
+ * 2026-06-04) with `tmux capture-pane -e`. Since 2.1.16x an *idle* input box is
+ * NOT blank — it renders a dim "ghost" placeholder hint. In plain text that is
+ * indistinguishable from a real draft, so `isReady` reads the styled capture
+ * and separates them by intensity: the placeholder is SGR-faint (code 2), the
+ * block cursor is reverse-video (code 7), a real draft is normal intensity.
+ *
+ * `\x1b` is ESC. These decode to:
+ *   IDLE_GHOST   : `❯ ` + reverse cursor on `T` + dim `ry "…"`  → idle
+ *   IDLE_EMPTY   : `❯ ` + reverse-video space cursor            → idle
+ *   DRAFT_NORMAL : `❯ hello world` at normal intensity + cursor → NOT idle
+ */
+const IDLE_GHOST_2_1_162 = '\x1b[39m❯ \x1b[7mT\x1b[0;2mry "how does <filepath> work?"\x1b[0m';
+const IDLE_EMPTY_2_1_162 = "\x1b[39m❯ \x1b[7m \x1b[0m";
+const DRAFT_NORMAL_2_1_162 = "\x1b[39m❯ hello world\x1b[7m \x1b[0m";
+
+describe("claude.boot.isReady — dim ghost-placeholder vs real draft (claude 2.1.162, ANSI)", () => {
+  it("accepts the idle box even when it shows the dim ghost-placeholder hint", () => {
+    // The 2.1.16x boot/wait-hang bug: a plain-text check reads `Try "…"` as a
+    // draft and never sees idle. The styled check sees it is all dim → idle.
+    expect(claude.boot.isReady(IDLE_GHOST_2_1_162)).toBe(true);
+    expect(claude.boot.isReady(IDLE_EMPTY_2_1_162)).toBe(true);
+  });
+
+  it("still rejects a REAL draft (normal intensity) — no silent turn-loss", () => {
+    expect(claude.boot.isReady(DRAFT_NORMAL_2_1_162)).toBe(false);
+  });
+
+  it("rules.idle agrees, so state()/wait() stop mis-reading the ghost hint", () => {
+    expect(claude.rules.idle(IDLE_GHOST_2_1_162)).toBe(true);
+    expect(claude.rules.idle(DRAFT_NORMAL_2_1_162)).toBe(false);
+  });
+
+  it("dialog/working predicates still match through SGR styling (stripped first)", () => {
+    // A styled trust-dialog header must still classify as a dialog, and a
+    // styled working footer as working — both strip SGR before substring match.
+    expect(claude.rules.dialog("\x1b[1m trust this folder\x1b[0m")).toBe(true);
+    expect(claude.rules.working("\x1b[2m esc to interrupt\x1b[0m")).toBe(true);
   });
 });
 
@@ -412,6 +479,19 @@ const MARK_TOOL_START =
   '1780520963.660420728 {"session_id":"ea1ed621","hook_event_name":"PreToolUse","tool_name":"Bash"}';
 const MARK_STOP = '1780520912.288493072 {"session_id":"ea1ed621","hook_event_name":"Stop"}';
 
+/**
+ * Enriched-payload fixtures — captured VERBATIM from claude 2.1.162 (spike,
+ * 2026-06-04). The payload carries the fields the Observer fuses: `source` +
+ * `transcript_path` on SessionStart, `last_assistant_message` on Stop. The
+ * agent seam translates these vendor names into the neutral edge.
+ */
+const MARK_START_FULL =
+  '1780534156.837258039 {"session_id":"399285a1-0c9a-41fa-bbbb-000000000000","transcript_path":"/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl","cwd":"/tmp/cmux","hook_event_name":"SessionStart","source":"startup","model":"claude-opus-4-8"}';
+const MARK_START_RESUME =
+  '1780534200.000000000 {"session_id":"399285a1","transcript_path":"/p/x.jsonl","hook_event_name":"SessionStart","source":"resume"}';
+const MARK_STOP_FULL =
+  '1780534162.949506605 {"session_id":"399285a1","transcript_path":"/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"PONG"}';
+
 describe("claude hook spec + marker parser", () => {
   const h = claude.hooks;
   if (!h) throw new Error("claude.hooks must be defined");
@@ -439,6 +519,27 @@ describe("claude hook spec + marker parser", () => {
     expect(toolEdge?.event).toBe("tool-start");
     expect(toolEdge?.tool).toBe("Bash");
     expect(h.parseMarker(MARK_STOP)).toMatchObject({ event: "stop", sessionId: "ea1ed621" });
+  });
+
+  it("translates the fusion payload into neutral edge fields (transcriptPath/source/finalMessage)", () => {
+    const start = h.parseMarker(MARK_START_FULL);
+    expect(start).toMatchObject({
+      event: "session-start",
+      source: "start", // claude's "startup" → neutral "start"
+      transcriptPath: "/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl",
+    });
+    expect(h.parseMarker(MARK_START_RESUME)?.source).toBe("resume");
+    const stop = h.parseMarker(MARK_STOP_FULL);
+    expect(stop).toMatchObject({
+      event: "stop",
+      finalMessage: "PONG", // closes the hook→transcript flush skew
+      transcriptPath: "/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl",
+    });
+    // Bare payloads (no fusion fields) simply omit them — never null/empty noise.
+    const bare = h.parseMarker(MARK_STOP);
+    expect(bare?.event).toBe("stop");
+    expect(bare?.transcriptPath).toBeUndefined();
+    expect(bare?.finalMessage).toBeUndefined();
   });
 
   it("an unknown event maps to 'other'; malformed lines return null (never throw)", () => {

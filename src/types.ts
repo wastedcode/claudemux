@@ -21,9 +21,35 @@ export type State = "working" | "idle" | "permission-prompt" | "dialog" | "unkno
 
 /**
  * Refinement of {@link State} for callers that only care about whether the
- * agent has stopped working. `wait()` returns one of these.
+ * agent has stopped working. Returned by {@link SessionHandle.state}-adjacent
+ * helpers; superseded for `wait()` by {@link TurnOutcome}.
  */
 export type IdleState = Extract<State, "idle" | "permission-prompt" | "dialog">;
+
+/**
+ * The terminal result of {@link SessionHandle.wait} — the single fused verdict
+ * for "the turn stopped, and why." `kind` is the stable discriminant; the nested
+ * axis (`on` / `reason`) is the open detail.
+ *
+ * **Compound ownership.** `wait()` is the *one* owner of this decision and it
+ * COMPOSES two atomic sub-owners without re-deriving their internals:
+ *   - the **observe** sub-owner (the Observer's fused belief from hooks +
+ *     transcript + pane) yields `completed` / `awaiting` / `aborted` /
+ *     `degraded`;
+ *   - the **policy** sub-owner (the patience budget) yields `budget-exceeded`
+ *     — `reason:"idle"` (no progress; stuck) vs `"max"` (wall-clock elapsed).
+ *
+ * `completed` guarantees the reply is **readable**: the Observer closes the
+ * hook→transcript flush skew before reporting it, so a following
+ * `messagesSince(cursor)` is race-free. Content never rides on the outcome — it
+ * stays with `messagesSince` (the one content owner).
+ */
+export type TurnOutcome =
+  | { readonly kind: "completed" }
+  | { readonly kind: "awaiting"; readonly on: "permission-prompt" | "dialog" }
+  | { readonly kind: "aborted" }
+  | { readonly kind: "budget-exceeded"; readonly reason: "idle" | "max" }
+  | { readonly kind: "degraded" };
 
 /**
  * A single conversation message, **backend-neutral** — never the agent's raw
@@ -166,6 +192,20 @@ export interface SessionHandle {
   messagesSince(cursor: Cursor): Promise<Message[]>;
 
   /**
+   * Did the turn anchored at `cursor` produce a reply? `true` iff an assistant
+   * message descends from it. The crash-recovery signal: after a resume, a
+   * `false` for your last-sent cursor means that turn was **lost** (the prompt
+   * is in the transcript with no reply) — re-send it. A *completed* turn is
+   * `true`; an in-flight or never-delivered one is `false`. Avoids hand-rolling a
+   * transcript scan to answer "what should I re-send?".
+   *
+   * NB: like {@link messagesSince}, it needs a locatable transcript; an adopted
+   * session with no recoverable id reads `false` (can't see the reply) — pair
+   * with `agentSessionId !== undefined` if you must distinguish that.
+   */
+  turnComplete(cursor: Cursor): Promise<boolean>;
+
+  /**
    * A point-in-time {@link Progress} snapshot — turn phase and progress signals
    * fused from the reliable hook + transcript channels (not pane-scraping).
    * Policy-free: the consumer turns staleness into its own patience.
@@ -184,29 +224,39 @@ export interface SessionHandle {
    * delivered, NOT that an in-flight abort has fully completed. It does exactly
    * one thing — stop the turn — and bundles no follow-up.
    *
-   * **After interrupt(), `state()` reads `unknown`, not `idle`:** claude
-   * restores the interrupted message into the composer rather than returning to
-   * a clean prompt. So do **not** `wait()`-for-idle after interrupt() (it never
-   * settles — no turn is in flight), and do **not** naively `send()` a
-   * replacement (it pastes onto the restored text and submits the
-   * concatenation). Clean "interrupt and replace" requires clearing the
-   * composer first — a consumer-composed, claude-specific recipe documented in
-   * the README, deliberately not folded into this agent-agnostic verb.
+   * **After interrupt(): `state()` reads `unknown` and `wait()` resolves
+   * `{ kind: "aborted" }`.** The handle records the interrupt authoritatively (an
+   * interrupt fires no `stop` edge and leaves the spinner's "esc to interrupt"
+   * frozen in scrollback, so neither channel alone can tell aborted from
+   * working). The record clears on the next `send()`. Still do **not** naively
+   * `send()` a replacement right after — claude restores the cut text into the
+   * composer, so a paste lands onto it and submits the concatenation. Clean
+   * "interrupt and replace" clears the composer first — a consumer-composed,
+   * claude-specific recipe documented in the README, deliberately not folded
+   * into this agent-agnostic verb.
    */
   interrupt(): Promise<void>;
 
   /**
-   * Block until the classifier reports {@link IdleState}.
+   * Block until the turn reaches a terminal {@link TurnOutcome} — "it stopped,
+   * and here's why." The single owner of the done-decision: it composes the
+   * Observer's fused belief (hooks + transcript + pane) with the patience budget,
+   * and **never throws on timeout** — a budget overrun returns
+   * `{ kind: "budget-exceeded" }`, not an exception.
    *
-   * @throws `ReplTimeout` if `opts.timeoutMs` (default 300_000ms) elapses
-   *   before the state settles.
+   * `completed` guarantees the reply is **readable** (the flush skew is closed),
+   * so a following `messagesSince(cursor)` is race-free. Content never rides on
+   * the outcome — read it with {@link messagesSince}.
+   *
+   * After {@link interrupt}, this resolves `{ kind: "aborted" }` (the pane shows
+   * the interrupted turn; no `stop` hook fires), so it is safe to call.
    */
-  wait(opts?: ReadyOpts): Promise<IdleState>;
+  wait(opts?: ReadyOpts): Promise<TurnOutcome>;
 
   /**
-   * Return the current pane-classifier verdict; pure read. This is the
-   * pane-scrape signal {@link wait} uses. For turn lifecycle, prefer
-   * {@link progress} (the reliable hook + transcript channel).
+   * Return the current fused {@link State} — the Observer's belief
+   * (hooks + transcript + pane), not a raw pane scrape; the same owner
+   * {@link wait} and {@link progress} defer to. Pure snapshot.
    */
   state(): Promise<State>;
 

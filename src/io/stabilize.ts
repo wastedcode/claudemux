@@ -28,10 +28,13 @@ export async function stabilize(
     pollMs: number;
     /** Overall budget; returns `{ stable: false, reason: "timeout" }` past it. */
     timeoutMs: number;
+    /** Capture with ANSI styling on (so the returned `text` feeds idle checks). */
+    ansi?: boolean;
   },
 ): Promise<StabilizeResult> {
   const start = Date.now();
-  let lastText = await backend.capture(ref, { lines: opts.lines });
+  const capOpts = { lines: opts.lines, ...(opts.ansi === true ? { ansi: true } : {}) };
+  let lastText = await backend.capture(ref, capOpts);
   let unchangedSince = Date.now();
 
   while (Date.now() - start < opts.timeoutMs) {
@@ -39,7 +42,7 @@ export async function stabilize(
       return { stable: true, text: lastText };
     }
     await sleep(opts.pollMs);
-    const now = await backend.capture(ref, { lines: opts.lines });
+    const now = await backend.capture(ref, capOpts);
     if (now !== lastText) {
       lastText = now;
       unchangedSince = Date.now();

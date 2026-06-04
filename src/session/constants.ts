@@ -29,6 +29,20 @@ export const PANE_HEIGHT = 40;
 export const CLASSIFIER_BOTTOM_N = PANE_HEIGHT;
 
 /**
+ * Capture options for any **readiness / classifier** read — bottom-N rows with
+ * ANSI styling **on** (`capture -e`). The styling is load-bearing: the agent's
+ * idle check separates the dim ghost-placeholder hint shown in an empty input
+ * box from a real (normal-intensity) draft, which is impossible on plain text
+ * (see claude `isReady`). Substring predicates (dialog headers, working) strip
+ * SGR first, so ANSI-on is safe for them too.
+ *
+ * Every readiness read uses this one shape so the `send→wait` pane fingerprints
+ * stay self-consistent (all ANSI). The *public* `capture()` is unaffected — it
+ * defaults to plain, user-facing text.
+ */
+export const CLASSIFIER_CAPTURE = { lines: CLASSIFIER_BOTTOM_N, ansi: true } as const;
+
+/**
  * Backend-neutral session-meta key under which {@link create} caches the
  * agent's conversation id, and {@link adopt} reads it back. The id is a
  * *locator* (it names a conversation and its transcript), not a secret; the

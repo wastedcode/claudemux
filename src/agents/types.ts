@@ -77,6 +77,14 @@ export interface AgentDef {
     extraArgs?: string[];
     sessionId?: string;
     sessionIdExplicit?: boolean;
+    /**
+     * Neutral "resume this existing conversation" request from the session
+     * layer's `resume()`. The agent maps it to its own resume flag (claude:
+     * `--resume <id>`) and surfaces that id as `agentSessionId`. Mutually
+     * exclusive with `sessionId`/an `extraArgs` identity flag (choosing the id
+     * twice → typed conflict). Keeps the vendor flag inside the agent seam.
+     */
+    resumeFrom?: string;
     sessionName?: string;
   }): {
     cmd: string;
@@ -124,6 +132,18 @@ export interface AgentDef {
      */
     parseLine(line: string): Message | null;
     /**
+     * The raw ancestry link (`id` + optional `parentId`) of **any** transcript
+     * record that carries an identity — including non-message records (e.g.
+     * `attachment`) that an agent may thread *between* a prompt and its reply.
+     * Returns `null` for blank/partial lines and records with no id.
+     *
+     * Lets the consumer reconstruct the *full* causal graph and so detect
+     * message descendants even when the chain passes through records
+     * {@link parseLine} drops. Optional: when absent, descendant detection falls
+     * back to links between surfaced messages only.
+     */
+    parseEdge?(line: string): { id: string; parentId?: string } | null;
+    /**
      * True when `message` starts a new user turn (a typed prompt), false for
      * tool-result feedback that is also recorded turn-side.
      */
@@ -157,6 +177,14 @@ export interface AgentDef {
  * A neutral, deterministic turn-lifecycle edge derived from an agent hook —
  * the reliable observe signal (vs pane-scraping). `event` is backend-neutral;
  * the Observer composes a sequence of these into phase / toolInFlight / done.
+ *
+ * Beyond the bare edge, a hook payload also carries data the Observer fuses with
+ * the transcript and pane. Those fields are surfaced here as **neutral** concepts
+ * (`transcriptPath`, `source`, `finalMessage`); the agent's `parseMarker` owns
+ * translating its vendor payload (e.g. claude's `transcript_path` /
+ * `last_assistant_message`) into them, so vendor field names never leak past the
+ * agent seam (grep-enforced). All are optional — present only on the edges that
+ * carry them, and only for agents whose hooks expose them.
  */
 export interface HookEdge {
   readonly event:
@@ -174,4 +202,24 @@ export interface HookEdge {
   readonly sessionId?: string;
   /** Tool name for `tool-start`/`tool-end` edges, when present. */
   readonly tool?: string;
+  /**
+   * The **authoritative** absolute path of the session's durable transcript, as
+   * the hook reported it. The Observer prefers this over recomputing/globbing
+   * the on-disk location (the path rule is fragile). Present on most edges.
+   */
+  readonly transcriptPath?: string;
+  /**
+   * Why the session started — only on a `session-start` edge. Lets the Observer
+   * distinguish a fresh boot from a resume (expect a history re-print) or a
+   * post-compaction continuation, without inspecting the screen.
+   */
+  readonly source?: "start" | "resume" | "clear" | "compact";
+  /**
+   * A preview of the turn's terminal assistant text, as the agent reported it on
+   * the `stop` edge — available *before* the transcript flushes that record.
+   * The Observer uses it to close the hook→transcript flush skew: on `stop` it
+   * polls the transcript until the durable reply is present, rather than reading
+   * stale content the instant the edge fires.
+   */
+  readonly finalMessage?: string;
 }
