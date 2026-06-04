@@ -25,6 +25,17 @@ import { CLASSIFIER_CAPTURE } from "./constants.js";
 import { rendezvousPathFor } from "./hooks.js";
 import { Mutex } from "./mutex.js";
 
+/**
+ * The {@link Cursor} {@link SessionHandle.send} returns when it could **not
+ * confirm delivery** — no user record for the sent text appeared (a lost Enter,
+ * a boot-race drop). It is a detectable sentinel, NOT a positional count: a count
+ * cursor persisted and reused later would silently slice the WHOLE transcript
+ * ("everything since index 0"). `messagesSince`/`turnComplete` on this sentinel
+ * read empty/false, so an unconfirmed turn surfaces as "re-send me", never a
+ * flood. Consumers can compare `cursor === DELIVERY_UNCONFIRMED`.
+ */
+export const DELIVERY_UNCONFIRMED = "delivery-unconfirmed";
+
 interface HandleDeps {
   backend: Backend;
   agent: AgentDef;
@@ -75,7 +86,7 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         // type an interleaved turn. Anchoring on the record this send produced is
         // immune to both. Fall back to a count only if it never appears.
         const ownId = await anchorOwnTurn(deps, beforeIds, text);
-        return ownId ?? String(before.length);
+        return ownId ?? DELIVERY_UNCONFIRMED; // no anchor → unconfirmed (never a count)
       }),
     messagesSince: (cursor) => mutex.run(async () => messagesSince(deps, cursor)),
     turnComplete: (cursor) =>
@@ -161,8 +172,12 @@ function transcriptMessages(deps: HandleDeps): Message[] {
 function messagesSince(deps: HandleDeps, cursor: string): Message[] {
   const { messages: all, parentOf } = transcriptThread(deps);
   if (all.some((m) => m.id === cursor)) return descendantsOf(all, parentOf, cursor);
-  const n = Number.parseInt(cursor, 10); // legacy / delivery-unconfirmed fallback
-  return Number.isFinite(n) && n >= 0 ? all.slice(n) : all;
+  // An explicit, *clean* positional cursor still slices (legacy, non-durable —
+  // positions shift as the transcript grows). Anything else — the
+  // DELIVERY_UNCONFIRMED sentinel, a stale/garbage cursor — reads EMPTY, never
+  // the whole transcript. A cursor that can't be resolved must not flood (F40).
+  const n = Number.parseInt(cursor, 10);
+  return Number.isFinite(n) && n >= 0 && String(n) === cursor.trim() ? all.slice(n) : [];
 }
 
 /** Messages + the full ancestry graph (bridges non-message records), or empty. */

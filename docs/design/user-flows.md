@@ -312,7 +312,7 @@ latency + memory creep invisible in a 5-minute test, fatal over a 3-day session.
 *Standardize:* tail-read (only the last N lines / since an offset), or cap the
 scan window.
 
-**F40 — The count-fallback cursor `"0"` reads the ENTIRE history. ❌**
+**F40 — The count-fallback cursor `"0"` reads the ENTIRE history. ✅ (S11)**
 *Hidden:* when `send`'s cursor anchoring fails (lost Enter, F10), it returns the
 string `"0"`. `messagesSince("0")` is the legacy count path → `all.slice(0)` =
 **every message ever**, not "since my send." *Bites:* a consumer stores `"0"`,
@@ -423,7 +423,7 @@ pane/transcript.
 | S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
 | S8 | ⬜ | **Long-think non-stuck:** confirm a `working` pane suppresses stuck-detection; add a live test. | F17 |
 | S10 | ⬜ | **Bounded reads:** tail/offset the rendezvous + transcript instead of full-file scans per poll. | F39 |
-| S11 | ⬜ | **Cursor sentinels:** distinguish "delivery unconfirmed" + "transcript unlocatable" from "no new messages" — never a cursor that silently means *everything*. | F40, F46 |
+| **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
 | S12 | ⬜ | **Dup-prompt anchoring:** anchor on the newest matching record; document the caveat. | F41 |
 | S13 | ⬜ | **Compaction-safe reads:** positional fallback when the causal walk yields nothing but the transcript grew. | F43, F25 |
 | S14 | ⬜ | **Paste safety:** sanitize bracketed-paste terminators + control bytes in `send`. | F48 |

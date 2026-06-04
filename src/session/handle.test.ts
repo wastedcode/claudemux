@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SendPayload } from "../backends/types.js";
-import { makeHandle } from "./handle.js";
+import { DELIVERY_UNCONFIRMED, makeHandle } from "./handle.js";
 
 const ctx = claude.transcript;
 if (!ctx) throw new Error("claude.transcript must be defined");
@@ -106,10 +106,12 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
     ].join("\n");
     writeFileSync(tx, noLinks);
     expect(txt(await handle().messagesSince("x1"))).toBe("B");
-    // Legacy count cursor + garbage cursor.
+    // Explicit positional cursor still slices; an UNRESOLVABLE cursor (garbage,
+    // or the delivery-unconfirmed sentinel) reads EMPTY — never the whole log (F40).
     writeFileSync(tx, [userRec("u1", null, "ONE"), asstRec("a1", "u1", "reply")].join("\n"));
     expect((await handle().messagesSince("1")).length).toBe(1);
-    expect((await handle().messagesSince("nope")).length).toBe(2);
+    expect((await handle().messagesSince("nope")).length).toBe(0);
+    expect((await handle().messagesSince("delivery-unconfirmed")).length).toBe(0);
   });
 
   it("turnComplete: true when a reply descends from the cursor, false for a DANGLING turn (S2/F20)", async () => {
@@ -166,7 +168,7 @@ describe("send() → cursor anchoring", () => {
     expect(await h.send("hello world")).toBe("own-1"); // the user record's id, not "0"
   });
 
-  it("falls back to a count cursor when no user record appears (delivery issue)", async () => {
+  it("returns the DELIVERY_UNCONFIRMED sentinel when no user record appears (not a count)", async () => {
     const h = makeHandle({
       backend: noopBackend(),
       agent: agent(),
@@ -174,7 +176,9 @@ describe("send() → cursor anchoring", () => {
       name: "t",
       agentSessionId: "id",
     });
-    expect(await h.send("hello")).toBe("0"); // nothing recorded → count fallback
+    // A count cursor here ("0") would later slice the whole transcript — the
+    // sentinel is detectable and reads empty instead (F40).
+    expect(await h.send("hello")).toBe(DELIVERY_UNCONFIRMED);
   });
 });
 

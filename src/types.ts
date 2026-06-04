@@ -178,16 +178,21 @@ export interface SessionHandle {
    * by construction (the substrate has no `sendRawText` primitive).
    *
    * Blocks on **write delivery**, NOT on the agent's response. Returns a
-   * {@link Cursor} anchored at this send — pass it to {@link messagesSince} to
-   * read what the turn produces.
+   * {@link Cursor} anchored at this send (the user record's id) — pass it to
+   * {@link messagesSince} to read what the turn produces. If delivery could not
+   * be confirmed (no record appeared), returns the `DELIVERY_UNCONFIRMED`
+   * sentinel instead of a fragile count — detectable, and safe to read against
+   * (it never floods).
    */
   send(text: string): Promise<Cursor>;
 
   /**
    * The messages produced since `cursor` (a value a prior {@link send}
    * returned), as neutral {@link Message}s read from the session transcript.
-   * Empty when the transcript can't be located (e.g. an adopted session with no
-   * recoverable {@link agentSessionId}).
+   * **Empty** when the transcript can't be located (an adopted session with no
+   * recoverable {@link agentSessionId}) OR the cursor can't be resolved (the
+   * `DELIVERY_UNCONFIRMED` sentinel, a stale/garbage value) — an unresolvable
+   * cursor never returns the whole transcript.
    */
   messagesSince(cursor: Cursor): Promise<Message[]>;
 
