@@ -137,8 +137,11 @@ export interface AgentDef {
    * (grep-enforced). The agent-agnostic Observer reads the file and feeds its
    * lines here; it never knows the schema or the path rule.
    *
-   * Optional for now: only the real agent implements it, and the Observer that
-   * consumes it has not landed. Becomes required once the Observer depends on it.
+   * Optional by **graceful degrade**, not by incompleteness: the Observer has
+   * landed and uses this whenever it's present (it backs `messagesSince` /
+   * `turnComplete` and fuses into the belief). An agent that omits it simply has
+   * no transcript channel — reads return empty and observation leans on hooks +
+   * pane. (claude implements it; a future agent may not.)
    */
   readonly transcript?: {
     /**
@@ -180,7 +183,11 @@ export interface AgentDef {
    * rendezvous line with {@link parseMarker}. Both live here so the
    * hook-event strings stay out of the agent-agnostic layers (grep-enforced).
    *
-   * Optional for now — becomes load-bearing when injection + the Observer land.
+   * Optional by **graceful degrade**, not by incompleteness: injection (the
+   * spawn layer) and the Observer have landed and use this whenever it's present
+   * (the reliable observe channel). An agent that omits it — or `create({ hooks:
+   * false })` — degrades honestly to the best-effort pane fallback
+   * (`hookChannelHealthy: false`), never silently.
    */
   readonly hooks?: {
     /**

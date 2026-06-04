@@ -44,7 +44,7 @@ export function buildProgram(): Command {
   const withAgent = (cmd: Command) =>
     common(cmd).option(
       "-a, --agent <name>",
-      'agent (default: "claude"; only "claude" supported in v0.0.1)',
+      'agent (default: "claude"; only "claude" supported currently)',
     );
 
   withAgent(program.command("spawn <name>"))

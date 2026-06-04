@@ -165,22 +165,11 @@ export interface ReadyOpts {
    */
   idleMs?: number;
   /**
-   * @deprecated Alias for {@link maxMs}, kept for source compatibility. Prefer
-   * `maxMs`. (Previously defaulted to 300_000ms; that library-owned default is
-   * gone — patience is the consumer's.)
+   * @deprecated Use {@link maxMs} instead. Kept as a source-compatible alias.
+   * (Previously defaulted to 300_000ms; that library-owned default is gone —
+   * patience is the consumer's.)
    */
   timeoutMs?: number;
-}
-
-/**
- * Read-only view of a client attached to the underlying pane. Not exposed
- * in v0.0.1 — the type is reserved for `listClients` in v0.1.
- */
-export interface ClientInfo {
-  /** Opaque, backend-supplied client identifier. */
-  id: string;
-  /** Optional TTY path the backend reports for the client. */
-  tty?: string;
 }
 
 /**

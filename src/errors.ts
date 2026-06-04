@@ -4,7 +4,7 @@
  * still has the context they need.
  *
  * No bare `Error` is ever thrown from the library. The classes here are
- * exhaustive for v0.0.1.
+ * exhaustive for the current public surface.
  */
 
 /** Base class — consumers can `catch (e: ClaudemuxError)` for the union. */

@@ -33,14 +33,14 @@ export interface CommonOpts extends RefOpts {
 }
 
 /**
- * Resolve the agent by short name. Only `claude` is supported in v0.0.1;
+ * Resolve the agent by short name. Only `claude` is supported currently;
  * any other value exits with a typed error message.
  */
 export function resolveAgent(name: string | undefined): AgentDef {
   const key = name ?? "claude";
   if (key !== "claude") {
     process.stderr.write(
-      `claudemux: unknown agent "${key}" — only "claude" is supported in v0.0.1\n`,
+      `claudemux: unknown agent "${key}" — only "claude" is supported\n`,
     );
     process.exit(2);
   }

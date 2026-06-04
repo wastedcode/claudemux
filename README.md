@@ -12,7 +12,7 @@ import { create } from "claudemux";
 
 const session = await create({ name: "job", cwd: process.cwd() });
 await session.send("Add a CHANGELOG entry for the next release");
-await session.wait();
+await session.wait(); // blocks until the turn ends; pass { maxMs } / { idleMs } to bound it
 const text = await session.capture();
 ```
 
@@ -420,7 +420,7 @@ Layering is grep-enforced in CI: `src/backends/**` never imports from `src/agent
 on every cell of the matrix. Windows-native support is not on the roadmap; WSL
 is community-contributable, undocumented by us.
 
-`claude` is the only supported agent in v0.0.1. The architecture allows additional agents (`codex`, etc.) via `AgentDef`; real demand will pull alternatives in.
+`claude` is the only supported agent today. The architecture allows additional agents (`codex`, etc.) via `AgentDef`; real demand will pull alternatives in.
 
 ## 8. Contributing
 

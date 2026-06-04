@@ -61,7 +61,7 @@ export function formatSessionLabel(ref: SessionRef): string {
 
 /**
  * The substrate's view of one named pane in a backend. Implemented by
- * `src/backends/tmux/index.ts` for v0.0.1; future backends (node-pty,
+ * `src/backends/tmux/index.ts` currently; future backends (node-pty,
  * `CustomPaneBackend`) implement the same interface.
  */
 export interface Backend {
