@@ -76,7 +76,8 @@ export function buildProgram(): Command {
 
   withAgent(program.command("ask <name> <text>"))
     .description("one Q&A round-trip: send, wait for the turn, print outcome + messages")
-    .option("--timeout-ms <ms>", "wait timeout in ms (default 300000)", parseIntOpt)
+    .option("--timeout-ms <ms>", "wall-clock cap in ms (CLI default 300000)", parseIntOpt)
+    .option("--idle-ms <ms>", "give up after this long with no progress", parseIntOpt)
     .action(async (name: string, text: string, opts: AskCliOpts) => {
       await askCli(name, text, opts);
     });
@@ -107,7 +108,8 @@ export function buildProgram(): Command {
 
   withAgent(program.command("wait <name>"))
     .description("block until the turn reaches a terminal outcome; print it as JSON")
-    .option("--timeout-ms <ms>", "timeout in ms (default 300000)", parseIntOpt)
+    .option("--timeout-ms <ms>", "wall-clock cap in ms (CLI default 300000)", parseIntOpt)
+    .option("--idle-ms <ms>", "give up after this long with no progress", parseIntOpt)
     .action(async (name: string, opts: WaitCliOpts) => {
       await waitCli(name, opts);
     });

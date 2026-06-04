@@ -315,6 +315,13 @@ The OSS-architect and Posse-builder reviews independently converged. Decisions n
    (kill `DEFAULT_WAIT_TIMEOUT_MS = 300_000` — library-owned patience, same class as the 5.5h
    deadlock). Boot transport-deadline + the 250ms stabilize debounce are legitimately the
    library's; idle budgets are not.
+   - ✅ **DONE (patience realignment).** `DEFAULT_WAIT_TIMEOUT_MS` and the hard-coded `STUCK_MS`
+     (30s idle auto-give-up) are removed. `ReadyOpts` exposes the consumer's `maxMs`/`idleMs`
+     (both optional, no default); `timeoutMs` is a deprecated alias for `maxMs`. With no bound,
+     `wait()` blocks until a terminal belief. The stabilize debounce stays library-side as noted.
+     The CLI (a consumer) keeps its own 300s default + a `--idle-ms` flag, so shell ergonomics
+     hold. The library now distinguishes stuck-from-working (its job); the *threshold* is the
+     consumer's (its job). `progress()` already exposes the same belief for poll-it-yourself use.
 6. **Cross-process honesty:** "exactly one outcome per `send()`" holds only within one process
    lifetime. After a reboot nobody holds the promise; `state()` can't tell "is the turn I sent
    pre-reboot still running" (no turn id). Either add a turn id or document the limit; the

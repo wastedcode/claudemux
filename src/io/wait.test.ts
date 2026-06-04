@@ -164,19 +164,20 @@ describe("waitForOutcome — cross-process baseline arm (stateless CLI fast turn
 
 /**
  * The long-build safety property (S8): a turn that is *legitimately working* must
- * NEVER be early-aborted by the stuck detector, no matter how long it runs — only
- * a genuinely wedged session (a FROZEN, unrecognized pane) is failed fast. `stuckMs`
- * is injected tiny here so the 30s contract is exercised in milliseconds.
+ * NEVER be early-aborted by the no-progress (`idleMs`) budget, no matter how long
+ * it runs — only a genuinely wedged session (a FROZEN, unrecognized pane) trips it.
+ * Patience is the CONSUMER's: `idleMs`/`maxMs` are passed via ReadyOpts (the library
+ * owns no default), and we pass them tiny here so the contract runs in milliseconds.
  */
-describe("waitForOutcome — stuck detector vs a working turn (S8 / F17)", () => {
-  const runStuck = (backend: Backend, ag: AgentDef, timeoutMs: number, stuckMs: number) =>
-    waitForOutcome(backend, ref, { timeoutMs }, { stabilize, stuckMs }, reader(backend, ag));
+describe("waitForOutcome — idle/no-progress budget vs a working turn (S8 / F17)", () => {
+  const runStuck = (backend: Backend, ag: AgentDef, maxMs: number, idleMs: number) =>
+    waitForOutcome(backend, ref, { maxMs, idleMs }, { stabilize }, reader(backend, ag));
 
-  it("an ANIMATING working pane is never early-stuck — runs to budget as `max`, not `idle`", async () => {
+  it("an ANIMATING working pane never trips idleMs — runs to maxMs as `max`, not `idle`", async () => {
     // The live spinner repaints (its elapsed counter ticks), so each frame differs
-    // → the progress heartbeat keeps resetting. Even with stuckMs far below the
-    // budget, wait() must keep polling and, at budget, report `max` (ran out of
-    // wall-clock while working) — NOT `idle` (wedged). This is the false-abort guard.
+    // → the progress heartbeat keeps resetting. Even with idleMs far below maxMs,
+    // wait() must keep polling and, at maxMs, report `max` (ran out of wall-clock
+    // while working) — NOT `idle` (wedged). This is the false-abort guard.
     const frames = Array.from({ length: 60 }, (_, i) => `✻ Working… ${i}s (esc to interrupt)`);
     const backend = new FrameBackend(frames);
     expect(await runStuck(backend, agent, 1_000, 200)).toEqual({
@@ -185,20 +186,34 @@ describe("waitForOutcome — stuck detector vs a working turn (S8 / F17)", () =>
     });
   });
 
-  it("a FROZEN unrecognized (unknown) pane IS failed fast as `idle` after the stuck window", async () => {
+  it("a FROZEN unrecognized (unknown) pane trips idleMs fast (`idle`)", async () => {
     // Nothing the classifier knows, and the frame never changes → genuinely
-    // wedged. Fails fast well before the (long) budget, labeled `idle`.
+    // wedged. Fails fast at idleMs, well before maxMs, labeled `idle`.
     const backend = new FrameBackend(["?? garbled non-prompt non-spinner output"]);
     const t0 = Date.now();
     const out = await runStuck(backend, agent, 10_000, 200);
     expect(out).toEqual({ kind: "budget-exceeded", reason: "idle" });
-    expect(Date.now() - t0).toBeLessThan(2_000); // early — did not burn the 10s budget
+    expect(Date.now() - t0).toBeLessThan(2_000); // early — did not burn the 10s maxMs
   });
 
-  it("a tool in flight is never early-stuck even with a FROZEN pane (the `!toolInFlight` guard)", async () => {
+  it("with NO patience supplied, a frozen unknown pane is NOT given up on (library owns no deadline)", async () => {
+    // The vision: the library invents no patience. With neither idleMs nor maxMs,
+    // a wedged pane is the consumer's problem — wait() keeps polling. We prove it
+    // doesn't return within a window that the old library-owned STUCK_MS would have.
+    const backend = new FrameBackend(["?? frozen unknown forever"]);
+    const settled = await Promise.race([
+      waitForOutcome(backend, ref, {}, { stabilize }, reader(backend, agent)).then(
+        () => "returned",
+      ),
+      new Promise((r) => setTimeout(() => r("still-waiting"), 800)),
+    ]);
+    expect(settled).toBe("still-waiting");
+  });
+
+  it("a tool in flight never trips idleMs even with a FROZEN pane (the `!toolInFlight` guard)", async () => {
     // Belief crafted directly: a tool is open (toolInFlight) but the pane reads
     // `unknown` and never changes. The `!toolInFlight` clause must keep wait()
-    // polling to budget rather than mistaking a long tool for a wedge.
+    // polling to maxMs rather than mistaking a long tool for a wedge.
     const frozenToolBelief: Belief = {
       phase: "tool",
       toolInFlight: true,
@@ -214,11 +229,11 @@ describe("waitForOutcome — stuck detector vs a working turn (S8 / F17)", () =>
     const out = await waitForOutcome(
       backend,
       ref,
-      { timeoutMs: 600 },
-      { stabilize, stuckMs: 150 },
+      { maxMs: 600, idleMs: 150 },
+      { stabilize },
       toolReader,
     );
-    expect(out.kind).toBe("budget-exceeded"); // ran to budget, NOT early-stuck
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(550); // burned the full budget, not the stuck window
+    expect(out.kind).toBe("budget-exceeded"); // ran to maxMs, NOT tripped by idleMs
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(550); // burned maxMs, not the idle window
   });
 });

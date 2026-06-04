@@ -8,7 +8,7 @@ import {
   resolveSocket,
   sharedDefaultBackend,
 } from "../session/default-backend.js";
-import type { SessionHandle } from "../types.js";
+import type { ReadyOpts, SessionHandle } from "../types.js";
 
 /**
  * Options to **locate** a session — every verb takes these. Mirrors the
@@ -84,6 +84,33 @@ export function handleFor(o: CommonOpts & { name: string }): Promise<SessionHand
     namespace: resolveNamespace(o.namespace),
     name: o.name,
   });
+}
+
+/** Wait-patience flags shared by `wait` and `ask`. */
+export interface PatienceCliOpts {
+  /** `--timeout-ms` — wall-clock cap (maps to {@link ReadyOpts.maxMs}). */
+  timeoutMs?: number;
+  /** `--idle-ms` — no-progress cap (maps to {@link ReadyOpts.idleMs}). */
+  idleMs?: number;
+}
+
+/** The CLI's own default wall-clock cap. */
+const CLI_DEFAULT_MAX_MS = 300_000;
+
+/**
+ * Build the library's {@link ReadyOpts} from CLI patience flags. The library
+ * imposes **no** default patience; the CLI is a *consumer* and supplies its own
+ * so a shell `wait`/`ask` can't hang forever: if neither bound is given it caps
+ * the wall-clock at {@link CLI_DEFAULT_MAX_MS}. `--timeout-ms` and `--idle-ms`
+ * override; passing `--idle-ms` alone opts out of the wall-clock default (the
+ * caller chose a no-progress bound deliberately).
+ */
+export function patienceOpts(o: PatienceCliOpts): ReadyOpts {
+  const maxMs = o.timeoutMs ?? (o.idleMs === undefined ? CLI_DEFAULT_MAX_MS : undefined);
+  return {
+    ...(maxMs === undefined ? {} : { maxMs }),
+    ...(o.idleMs === undefined ? {} : { idleMs: o.idleMs }),
+  };
 }
 
 /** Read all of stdin as UTF-8 — the `<text>` = `"-"` piping convention. */

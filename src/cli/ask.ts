@@ -1,9 +1,13 @@
 import { ask } from "../compose.js";
-import { type CommonOpts, handleFor, readStdin } from "./context.js";
+import {
+  type CommonOpts,
+  type PatienceCliOpts,
+  handleFor,
+  patienceOpts,
+  readStdin,
+} from "./context.js";
 
-export interface AskCliOpts extends CommonOpts {
-  timeoutMs?: number;
-}
+export interface AskCliOpts extends CommonOpts, PatienceCliOpts {}
 
 /**
  * `claudemux ask <name> <text>` — the Q&A round-trip face: send → wait → read.
@@ -14,11 +18,7 @@ export interface AskCliOpts extends CommonOpts {
 export async function askCli(name: string, text: string, opts: AskCliOpts = {}): Promise<void> {
   const body = text === "-" ? await readStdin() : text;
   const handle = await handleFor({ ...opts, name });
-  const result = await ask(
-    handle,
-    body,
-    opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs },
-  );
+  const result = await ask(handle, body, patienceOpts(opts));
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (result.outcome.kind !== "completed") process.exitCode = 1;
 }

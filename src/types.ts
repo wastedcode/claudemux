@@ -36,8 +36,12 @@ export type IdleState = Extract<State, "idle" | "permission-prompt" | "dialog">;
  *   - the **observe** sub-owner (the Observer's fused belief from hooks +
  *     transcript + pane) yields `completed` / `awaiting` / `aborted` /
  *     `degraded`;
- *   - the **policy** sub-owner (the patience budget) yields `budget-exceeded`
- *     — `reason:"idle"` (no progress; stuck) vs `"max"` (wall-clock elapsed).
+ *   - the **policy** sub-owner — the **consumer's** patience, passed as
+ *     {@link ReadyOpts} — yields `budget-exceeded`: `reason:"idle"` (no progress
+ *     for `idleMs`) vs `"max"` (wall-clock `timeoutMs` elapsed). The library owns
+ *     **no** patience of its own: with neither budget supplied, `wait()` never
+ *     returns `budget-exceeded` — it waits for a terminal belief. "Time is the
+ *     policy's."
  *
  * `completed` guarantees the reply is **readable**: the Observer closes the
  * hook→transcript flush skew before reporting it, so a following
@@ -131,16 +135,40 @@ export interface Progress {
 }
 
 /**
- * Options governing {@link SessionHandle.wait}. v0.0.1 ships **state-mode
- * only**; `pattern` and `debounce` modes are deferred to v0.1.
+ * The consumer's **patience** for {@link SessionHandle.wait} — the policy
+ * sub-owner of {@link TurnOutcome}. The library imposes **no** patience of its
+ * own ("time is the policy's"): every field is optional with **no default**, and
+ * with none supplied `wait()` blocks until a terminal belief
+ * (`completed`/`awaiting`/`aborted`) — it never invents a deadline. Supply a
+ * bound to cap a turn that may never end; the matching `budget-exceeded.reason`
+ * tells you which bound tripped.
  *
  * @example
  * ```ts
- * await session.wait({ timeoutMs: 60_000 });
+ * await session.wait();                          // no bound — wait for the turn
+ * await session.wait({ maxMs: 60_000 });          // give up after 60s wall-clock
+ * await session.wait({ idleMs: 30_000 });         // give up after 30s of no progress
  * ```
  */
 export interface ReadyOpts {
-  /** Hard timeout. Defaults to 300_000ms (5 min). */
+  /**
+   * Wall-clock cap (ms from the call). Exceeded ⇒ `budget-exceeded{reason:"max"}`.
+   * No default — omit to wait without a wall-clock bound.
+   */
+  maxMs?: number;
+  /**
+   * No-progress cap (ms): give up after this long with no observable progress AND
+   * the agent not in a known-working state (no spinner, no tool in flight). A
+   * progressing or working turn never trips it (its heartbeat keeps resetting),
+   * so this is "stuck too long," never "still working too long." Exceeded ⇒
+   * `budget-exceeded{reason:"idle"}`. No default.
+   */
+  idleMs?: number;
+  /**
+   * @deprecated Alias for {@link maxMs}, kept for source compatibility. Prefer
+   * `maxMs`. (Previously defaulted to 300_000ms; that library-owned default is
+   * gone — patience is the consumer's.)
+   */
   timeoutMs?: number;
 }
 

@@ -245,16 +245,22 @@ guard; the resume-replay bug this fixed).
 ## F. Patience, budget & stuck
 
 **F31 — wait with a short budget on a genuinely slow turn. ✅**
-*Expected:* `wait({timeoutMs})` returns `{kind:"budget-exceeded", reason:"max"}`
-— a returned verdict, **never a throw**. The consumer keeps waiting (poll again)
-or escalates. "Progress is the agent's, time is the policy's."
+*Expected:* `wait({maxMs})` returns `{kind:"budget-exceeded", reason:"max"}` — a
+returned verdict, **never a throw**. The consumer keeps waiting (poll again) or
+escalates. "Progress is the agent's, time is the policy's." *Standardized
+(patience realignment):* the budget is the CONSUMER's — the library owns no
+default. `maxMs` is wall-clock; `timeoutMs` is a deprecated alias. With no bound,
+`wait()` blocks until terminal and invents no deadline (RFC §5).
 
-**F32 — wait on a wedged session (crashed mid-turn, no progress). ⚠️**
-*Expected:* `{kind:"budget-exceeded", reason:"idle"}` — distinguishes *stuck*
-(no progress for the idle window) from *still-working-at-the-wall* (`max`). Never
-an infinite hang. *Standardize:* this composes with F20 — a resumed session with a
-stale `working` edge must not look "wedged"; the idle-pane override (F20 fix)
-makes `wait` return promptly once the box is idle.
+**F32 — wait on a wedged session (crashed mid-turn, no progress). ✅**
+*Expected:* `wait({idleMs})` → `{kind:"budget-exceeded", reason:"idle"}` —
+distinguishes *stuck* (no progress for the consumer's `idleMs`) from
+*still-working* (a `working` pane or tool-in-flight never trips `idleMs`; only a
+genuinely frozen/`unknown` pane does). *Standardized:* the THRESHOLD is the
+consumer's (no library `STUCK_MS`); the library only distinguishes
+stuck-from-working. Composes with F20 — a resumed session's stale `working` edge
+is overridden by the idle pane, so a settled box isn't mistaken for wedged.
+Locked by unit tests (`src/io/wait.test.ts`, injectable via `idleMs`).
 
 **F33 — wait hits an awaiting state (permission prompt). ✅**
 *Journey:* the agent asks to run a tool that needs approval.

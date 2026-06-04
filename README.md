@@ -377,10 +377,10 @@ Because a cleanly-down backend server reports `false` for *every* session, all y
 | `completed` | The turn finished **and its reply is readable** (the ~100ms hook→transcript flush skew is closed). |
 | `awaiting` | Paused on a modal only the pane sees — `outcome.on ∈ {permission-prompt, dialog}`. |
 | `aborted` | An `interrupt()` stopped it. |
-| `budget-exceeded` | Your patience budget ran out — `outcome.reason: "idle"` (no progress; stuck) vs `"max"` (wall-clock). **Not "failed"** — poll again, don't blindly re-send. |
+| `budget-exceeded` | One of **your** patience bounds ran out — `outcome.reason: "idle"` (no progress for `idleMs`) vs `"max"` (wall-clock `maxMs`). **Not "failed"** — poll again, don't blindly re-send. |
 | `degraded` | The observe channels can't form a confident belief. |
 
-`wait()` is the compound owner of the done-decision: it composes the Observer's belief with your patience budget (default 5 minutes; pass `{ timeoutMs }`). Patience is **yours** — claudemux reports the signal, never imposes an idle timeout. (`progress()` is the same belief without the wait — `{ phase, toolInFlight, transcriptCount, hookChannelHealthy, state }`; `hookChannelHealthy: false` means observe degraded to the pane fallback and says so.)
+`wait()` is the compound owner of the done-decision: it composes the Observer's belief with **your** patience. The library owns **none** — there is no default timeout. Pass `wait({ maxMs })` (wall-clock cap), `wait({ idleMs })` (give up after no progress for that long — a *working* turn or a tool in flight never trips it, only a genuinely stuck one), or both; with neither, `wait()` blocks until a terminal outcome and never invents a deadline. "Time is the policy's." (`progress()` is the same belief without the wait — `{ phase, toolInFlight, transcriptCount, hookChannelHealthy, state }`; poll it and apply your own patience if you'd rather not block.)
 
 **Permission prompts.** claudemux owns no configuration — you set claude's permission mode (see §1). A session left in interactive `default` mode that hits a mid-turn tool-approval prompt (`Do you want to create hello.txt?` → `1. Yes / 2. Yes, allow all… / 3. No`) surfaces it as a first-class state: `state()` reads `permission-prompt`, and `wait()` returns `{ kind: "awaiting", on: "permission-prompt" }` instead of timing out. Answer it with **`respond(choice)`** — `"approve"` (this once), `"approve-for-session"` (allow the rest of the session), or `"deny"`. The natural loop is the analog of `send → wait`:
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`wait()` owns no patience — "time is the policy's."** The library-imposed
+  `DEFAULT_WAIT_TIMEOUT_MS` (5 min) and the hard-coded `STUCK_MS` (30s idle
+  auto-give-up) are **removed** (read/write-split RFC §5: patience is the
+  consumer's, not the library's — same class as the 5.5h-deadlock anti-pattern).
+  `ReadyOpts` now exposes the consumer's two patience knobs, **both optional with
+  no default**: `maxMs` (wall-clock → `budget-exceeded{reason:"max"}`) and `idleMs`
+  (no-progress → `budget-exceeded{reason:"idle"}`; a working turn or a tool in
+  flight never trips it). With neither supplied, `wait()` blocks until a terminal
+  outcome and invents no deadline. `timeoutMs` is kept as a deprecated alias for
+  `maxMs` (so existing callers compile unchanged) — **behavior change:** a bare
+  `wait()` no longer times out at 5 min. The CLI (`wait`/`ask`), a *consumer*,
+  keeps a 300s wall-clock default of its own and gains `--idle-ms`, so shell use
+  is unaffected. Surfaced by the drift-from-vision audit (the library was owning
+  patience it shouldn't).
+
 ### Added
 
 - **`send()` now recovers a lost submit (lost-Enter retry).** If the paste reaches

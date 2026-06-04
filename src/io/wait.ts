@@ -4,10 +4,7 @@ import { CLASSIFIER_BOTTOM_N } from "../session/constants.js";
 import type { ReadyOpts, TurnOutcome } from "../types.js";
 import { sleep } from "../util/sleep.js";
 import { paneFingerprint, readSendBaseline } from "./baseline.js";
-import { type StabilizeResult, stabilize as defaultStabilize } from "./stabilize.js";
-
-/** Default total budget for `wait()`: 5 minutes. */
-const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+import type { StabilizeResult, stabilize as defaultStabilize } from "./stabilize.js";
 
 /** How long the idle box must hold steady before "completed" (guards mid-stream returns). */
 const IDLE_STABLE_WINDOW_MS = 250;
@@ -15,23 +12,8 @@ const IDLE_STABLE_WINDOW_MS = 250;
 /** Polling cadence while waiting. */
 const POLL_MS = 150;
 
-/**
- * No-progress window after which a *blind* wait (no hook signal, pane shows
- * nothing recognizable) gives up early as `budget-exceeded{idle}` instead of
- * burning the whole wall-clock budget on a wedged turn. Conservative so a model
- * that legitimately thinks for a while (a `working` pane, or a tool in flight)
- * is never mistaken for stuck.
- */
-const STUCK_MS = 30_000;
-
 interface WaitDeps {
   stabilize: typeof defaultStabilize;
-  /**
-   * No-progress window for the early blind-wedge exit ({@link STUCK_MS} in
-   * production). Injectable so the stuck contract is unit-testable without
-   * burning 30s of wall-clock; the handle never overrides it.
-   */
-  stuckMs?: number;
 }
 
 /**
@@ -48,8 +30,11 @@ export type BeliefReader = () => Promise<{ belief: Belief; paneText: string }>;
  * re-derives neither's internals:
  *   - the **observe** sub-owner (the injected {@link BeliefReader}: hooks +
  *     transcript + pane) yields `completed` / `awaiting` / `aborted`;
- *   - the **policy** sub-owner (the patience budget, here) yields
- *     `budget-exceeded` — `reason:"max"` (wall-clock) vs `"idle"` (wedged).
+ *   - the **policy** sub-owner — the CONSUMER's patience ({@link ReadyOpts}) —
+ *     yields `budget-exceeded`: `reason:"max"` (wall-clock `maxMs`) vs `"idle"`
+ *     (no progress for `idleMs`). The library owns NO patience: with neither
+ *     bound supplied, `wait()` blocks until a terminal belief (it never invents a
+ *     deadline; "time is the policy's").
  *
  * **Completion is hook-first, flush-safe.** The `stop` hook edge is the reliable
  * "turn ended" trigger; but the edge fires ~100ms before the transcript flushes
@@ -70,13 +55,16 @@ export async function waitForOutcome(
   backend: Backend,
   ref: SessionRef,
   opts: ReadyOpts,
-  deps: WaitDeps = { stabilize: defaultStabilize },
-  readBelief: BeliefReader = () => {
-    throw new Error("waitForOutcome requires a BeliefReader");
-  },
+  // Both required — the handle (and tests) always inject them. A throwing default
+  // would just move a programmer error from compile time to runtime.
+  deps: WaitDeps,
+  readBelief: BeliefReader,
 ): Promise<TurnOutcome> {
-  const budget = opts.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
-  const stuckMs = deps.stuckMs ?? STUCK_MS;
+  // The CONSUMER's patience — both optional, NO library default. `timeoutMs` is
+  // a deprecated alias for `maxMs`. With neither set, `wait()` owns no deadline
+  // and blocks until a terminal belief ("time is the policy's").
+  const maxMs = opts.maxMs ?? opts.timeoutMs;
+  const idleMs = opts.idleMs;
   const start = Date.now();
   // "armed" = evidence this turn ran (pane left idle, or diverged from the
   // post-submit baseline) — needed for the hooks-off path; the hook `stop` edge
@@ -109,7 +97,10 @@ export async function waitForOutcome(
     if (belief.state !== "idle") armed = true;
     else if (baseline !== undefined && paneFingerprint(paneText) !== baseline) armed = true;
     if (belief.state === "idle" && (hookDone || armed)) {
-      const remaining = Math.max(0, budget - (now - start));
+      // The stabilize debounce is a transport detail (legitimately the library's,
+      // per the read/write-split RFC); cap it by any remaining wall-clock budget.
+      const remaining =
+        maxMs === undefined ? IDLE_STABLE_WINDOW_MS * 4 : Math.max(0, maxMs - (now - start));
       const r: StabilizeResult = await deps.stabilize(backend, ref, {
         lines: CLASSIFIER_BOTTOM_N,
         windowMs: IDLE_STABLE_WINDOW_MS,
@@ -121,21 +112,22 @@ export async function waitForOutcome(
       if (r.stable && (await readBelief()).belief.state === "idle") return { kind: "completed" };
     }
 
-    // ── policy sub-owner: budget / stuck ────────────────────────────────────
-    if (now - start > budget) {
-      // Recent progress ⇒ ran out of wall-clock ("max"); otherwise wedged ("idle").
-      return { kind: "budget-exceeded", reason: now - lastProgressAt < stuckMs ? "max" : "idle" };
-    }
-    // Early stuck: blind (no hook lifecycle, pane unrecognized) and nothing has
-    // changed for the stuck window — fail fast rather than burn the full budget.
-    // Gated on `state==="unknown"` AND `!toolInFlight`: a `working` pane (the
-    // live spinner shows "esc to interrupt") or a tool in flight is NEVER early-
-    // stuck, no matter how long it runs — that is the long-build safety property.
-    // And `sinceProgress` keys on the pane fingerprint, so a still-animating
-    // spinner (its elapsed counter ticks) keeps resetting the heartbeat even
-    // when the frame classifies as `unknown` — only a genuinely FROZEN unknown
-    // pane reaches this.
-    if (belief.state === "unknown" && !belief.toolInFlight && now - lastProgressAt > stuckMs) {
+    // ── policy sub-owner: the CONSUMER's patience (the library owns none) ─────
+    // Wall-clock cap.
+    if (maxMs !== undefined && now - start > maxMs)
+      return { kind: "budget-exceeded", reason: "max" };
+    // No-progress cap. Gated on `state==="unknown" && !toolInFlight` so it means
+    // "stuck too long," never "still working too long": a `working` pane (the live
+    // `esc to interrupt` spinner) or a tool in flight is never counted as idle,
+    // and the heartbeat keys on the pane fingerprint so a still-animating spinner
+    // keeps resetting it even when a frame classifies `unknown`. The THRESHOLD is
+    // the consumer's (`idleMs`); the library only distinguishes stuck-from-working.
+    if (
+      idleMs !== undefined &&
+      belief.state === "unknown" &&
+      !belief.toolInFlight &&
+      now - lastProgressAt > idleMs
+    ) {
       return { kind: "budget-exceeded", reason: "idle" };
     }
 

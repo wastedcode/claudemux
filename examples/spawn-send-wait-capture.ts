@@ -21,6 +21,8 @@ async function main(): Promise<void> {
     });
 
     const cursor = await session.send("Print 'hello from claudemux' and stop.");
+    // wait() blocks until a terminal outcome; the library imposes no deadline.
+    // Supply your own patience to cap it — wait({ maxMs }) and/or wait({ idleMs }).
     const outcome = await session.wait(); // → a TurnOutcome you branch on
     process.stdout.write(`outcome: ${outcome.kind}\n`); // "completed"
 
