@@ -209,3 +209,40 @@ Empirical (2026-06-04, isolated socket) + Anthropic docs:
   `--fork-session` makes a new id/file.
 - **Docs status:** SessionStart `source` + lazy-transcript = documented; MCP-vs-SessionStart timing
   + resume grace-period = SILENT (hence the on-box verification).
+
+## IMPLEMENTED: R5 + R1 (2026-06-04) — with a delivery-safety refinement
+
+Shipped on `feat/read-write-split`. 272 unit tests + live acceptance suite **9/9, 3× reliable**;
+founder's 5 default-socket sessions untouched throughout (all spikes on isolated `-L` sockets).
+
+- **R5 refined: the hook GATES, the pane SETTLES (it is not "return on the edge").** The
+  isolated-spike claim above ("send IMMEDIATELY after the marker landed every run") held in the
+  spike but **broke ~1/4 in the real `create()` path**: the fresh REPL is still painting its
+  welcome/MCP render when the edge fires, and the *first* send pasted into that render storm is
+  silently lost (cursor falls back to a count, turn never submits). So `bootSession` now: dialogs
+  first → **require the `session-start` edge** (when hooks on; a ready-looking pane is NOT trusted
+  without it — the founder's north star) → **then still require a *stable* `isReady` box** before
+  returning (the old stabilize window, which absorbs the render storm). Removing that settle is what
+  reintroduced the flake. Hooks-off boot uses the pane path alone (R1).
+- **R1 implemented: `isReady` is ANSI-dim-aware.** Readiness/classifier reads use `capture -e`
+  (`CLASSIFIER_CAPTURE`); `isReady` separates the dim ghost-placeholder (SGR 2 faint) + reverse
+  cursor (SGR 7) from a normal-intensity draft. Substring predicates (dialog/working) `stripSgr`
+  first. Fixtures pinned from real 2.1.162 ANSI captures. This also fixes the `state()`/`wait()`
+  ghost-hint idle bug for the hooks-off / pane paths.
+
+**Two correctness findings surfaced while validating (both now in agent memory):**
+- **claude 2.1.162 threads `attachment`/`system` records INTO the transcript parent chain** between
+  a user prompt and its assistant reply (assistant's `parentUuid` → an attachment, not the user
+  record). Message-only ancestry is severed → `messagesSince` returned `[]`. Fixed: `parseEdge`
+  (raw id→parent of every record) + `readThread` (full graph) + `descendantsOf` walks it. Was direct
+  user→assistant in 2.1.161 — a minor-version schema drift; re-verify after claude bumps.
+- **The `Stop` hook edge precedes the transcript flush by ~100ms** (done@1042ms, reply-in-jsonl@
+  1146ms). So `progress().phase==="done"` does NOT mean `messagesSince` can read the reply yet.
+  Today's reliable "done AND readable" is the pane `wait()` (it trails past the flush). The proper
+  fix belongs in the **TurnOutcome / `wait()` consolidation (3c)**: on a Stop edge, briefly poll the
+  transcript until the turn's reply is present (bounded) before declaring `completed` — so consumers
+  never need to know to use the pane path. **Open item.**
+
+**Still open from the fix set:** R2/R3 (typed boot outcomes + progress-vs-stuck), R4 (fail-closed
+generic-modal net), R6 (pre-trust), R7 (resume-settle), R8 (live-region bound); and the 3c
+TurnOutcome consolidation that should absorb the hook→transcript flush settle above.

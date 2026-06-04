@@ -23,16 +23,27 @@ const kinds = (msgs) => msgs.flatMap((m) => m.parts.map((p) => p.kind));
 async function waitDone(session, ms = 60_000) {
   const deadline = Date.now() + ms;
   const seen = [];
+  // Transition-aware: the PRIOR turn's `done` is still the latest phase right
+  // after we send, so we must see this turn START (any non-done phase) before a
+  // `done` counts — else turn 2 returns on turn 1's stale done (a flaky read).
+  let armed = false;
   while (Date.now() < deadline) {
     const p = await session.progress();
     if (seen.at(-1) !== p.phase) seen.push(p.phase);
-    if (p.phase === "done") return seen;
-    await new Promise((r) => setTimeout(r, 350));
+    if (p.phase !== "done") armed = true;
+    if (armed && p.phase === "done") return seen;
+    await new Promise((r) => setTimeout(r, 200));
   }
   return seen;
 }
 const fresh = (n, opts = {}) =>
-  create({ name: `${n}-${Date.now().toString(36)}`, cwd: CWD, trustWorkspace: true, bootTimeoutMs: 60_000, ...opts });
+  create({
+    name: `${n}-${Date.now().toString(36)}`,
+    cwd: CWD,
+    trustWorkspace: true,
+    bootTimeoutMs: 60_000,
+    ...opts,
+  });
 
 // A) Multi-turn + cursor isolation — the thing the unit test only mocked.
 async function scenarioA() {
@@ -40,15 +51,24 @@ async function scenarioA() {
   const s = await fresh("acc-a");
   try {
     const c1 = await s.send("Reply with exactly the single word: ONE");
-    await waitDone(s);
+    // wait() is the reliable "done AND readable" signal: it trails until the
+    // pane settles, which is *after* the transcript flush. The raw hook `done`
+    // edge precedes the assistant-record flush by ~100ms, so reading messages
+    // on it races the flush (that skew belongs to the TurnOutcome work).
+    await s.wait();
     const c2 = await s.send("Reply with exactly the single word: TWO");
-    await waitDone(s);
+    await s.wait();
     const since1 = await s.messagesSince(c1);
     const since2 = await s.messagesSince(c2);
     const t1 = since1.map(text).join(" ");
     const t2 = since2.map(text).join(" ");
     rec("A", "messagesSince(c1) has BOTH turns", t1.includes("ONE") && t1.includes("TWO"), t1);
-    rec("A", "messagesSince(c2) isolates turn 2 (TWO, not ONE)", t2.includes("TWO") && !t2.includes("ONE"), t2);
+    rec(
+      "A",
+      "messagesSince(c2) isolates turn 2 (TWO, not ONE)",
+      t2.includes("TWO") && !t2.includes("ONE"),
+      t2,
+    );
   } finally {
     await s.kill();
   }
@@ -59,8 +79,11 @@ async function scenarioB() {
   console.log("\n[B] tool-using turn — phase + tool parts\n");
   const s = await fresh("acc-b");
   try {
-    const c = await s.send("Use the Bash tool to run exactly: echo TOOLRAN. Then reply with the single word DONE.");
+    const c = await s.send(
+      "Use the Bash tool to run exactly: echo TOOLRAN. Then reply with the single word DONE.",
+    );
     const phases = await waitDone(s);
+    await s.wait(); // settle past the hook-done→transcript-flush skew before reading
     const msgs = await s.messagesSince(c);
     console.log(`    phases: ${phases.join(" → ")}`);
     rec("B", "phase went through 'tool'", phases.includes("tool"), phases.join("→"));
@@ -77,18 +100,19 @@ async function scenarioC() {
   const s = await fresh("acc-c", { hooks: false });
   try {
     const c = await s.send("Reply with exactly the single word: THREE");
-    // No hook phase to wait on; poll the transcript count to settle instead.
-    let last = -1;
-    for (let i = 0; i < 30; i++) {
-      const p = await s.progress();
-      if (p.transcriptCount === last && p.transcriptCount > 0) break;
-      last = p.transcriptCount;
-      await new Promise((r) => setTimeout(r, 500));
-    }
+    // hooks:false has no Stop edge, so progress() can't report "done" — the
+    // honest degraded-mode settle is the pane-based wait(), which classifies
+    // idle from the TUI. (Polling transcriptCount is wrong: it plateaus at 1
+    // in the gap between the user record flushing and the reply landing.)
+    await s.wait();
     const p = await s.progress();
     const msgs = await s.messagesSince(c);
     rec("C", "hookChannelHealthy is false (honest degrade)", p.hookChannelHealthy === false);
-    rec("C", "messagesSince still returns the reply (transcript fallback)", msgs.some((m) => text(m).includes("THREE")));
+    rec(
+      "C",
+      "messagesSince still returns the reply (transcript fallback)",
+      msgs.some((m) => text(m).includes("THREE")),
+    );
   } finally {
     await s.kill();
   }
@@ -99,7 +123,9 @@ async function scenarioD() {
   console.log("\n[D] interrupt() stops a turn\n");
   const s = await fresh("acc-d");
   try {
-    await s.send("Write a long, detailed 400-word essay about the history of Unix. Output it directly.");
+    await s.send(
+      "Write a long, detailed 400-word essay about the history of Unix. Output it directly.",
+    );
     await new Promise((r) => setTimeout(r, 4000)); // let it start generating
     await s.interrupt();
     await new Promise((r) => setTimeout(r, 2500));
