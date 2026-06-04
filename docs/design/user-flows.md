@@ -119,12 +119,16 @@ bridges 2.1.162 attachment records) — the prior turn never leaks.
 *Expected:* `progress().phase` walks `prompt→tool→composing→done`;
 `messagesSince` includes `tool` + `tool-result` parts (neutral, summarized).
 
-**F17 — Long-thinking turn (minutes of silence, no tool). ⚠️**
-*Journey:* an extended-reasoning turn writes no transcript for a while.
-*Expected:* NOT flagged stuck — the pane shows `working` (`esc to interrupt`), so
-`state`=working and `wait` holds. *Standardize:* claudemux's stuck-detection keys
-off "no progress AND pane unrecognized"; confirm a `working` pane suppresses it
-(Posse needed `paneHash` for exactly this blind spot). Add a long-think live test.
+**F17 — Long-thinking turn (minutes of silence, no tool). ✅**
+*Journey:* an extended-reasoning turn (or a long foreground tool) writes no
+transcript for a while. *Expected:* NOT flagged stuck. *Standardized (S8):* the
+stuck-detector's early-exit is gated on `state==="unknown" && !toolInFlight` — a
+`working` pane (the live `esc to interrupt` spinner) or a tool in flight is never
+early-aborted, and the heartbeat keys on the pane fingerprint so the still-
+animating spinner (its elapsed counter ticks) keeps it alive even if a frame
+classifies `unknown`. Only a genuinely FROZEN unknown pane fails fast (`idle`).
+Locked by unit tests (`src/io/wait.test.ts`, injectable `stuckMs`) AND a live
+scenario E (a ~45s working turn → `completed`) in `scripts/acceptance-suite.mjs`.
 
 **F18 — Streaming read (read mid-turn). ✅**
 *Journey:* daemon tails partial output before the turn ends.
@@ -427,7 +431,7 @@ pane/transcript.
 | **S5** | ✅ **done** | **Permission-prompt `awaiting` + `respond()`:** header+menu classifier, `respond("approve"\|"approve-for-session"\|"deny")` (handle + `claudemux respond` CLI), self-confirming so `respond→wait` is race-free. Also fixed the denied-tool dangling-`tool-start` that kept `wait` at `budget-exceeded`. Live-verified on 2.1.162 (approve + deny) via `scripts/flows-permission-prompt.mjs`. | F33, F49 |
 | S6 | ⬜ | **Resume recipes:** document `adopt→resume` restart, `fork()`, compaction-resume; live-verify. | F22, F25, F27 |
 | S7 | ⬜ | **Boot-concurrency policy:** document that throttling is the consumer's. | F8 |
-| S8 | ⬜ | **Long-think non-stuck:** confirm a `working` pane suppresses stuck-detection; add a live test. | F17 |
+| **S8** | ✅ **done** | **Long-think non-stuck:** the stuck early-exit is gated on `unknown && !toolInFlight`; a `working` pane / tool-in-flight is never early-aborted, and the spinner-animated fingerprint keeps the heartbeat alive. Unit-tested (injectable `stuckMs`) + live scenario E (~45s working turn → completed). | F17 |
 | **S10** | ✅ **done** | **Bounded reads:** a per-handle `SessionObserver` with incremental `TailReader`s — each `state`/`progress`/`wait`/`messagesSince` poll parses only newly-appended bytes (O(delta), not O(file)). The whole read path (handle + wait) was restructured to defer to it; the old full-read observer functions removed. | F39 |
 | **S11** | ✅ **done** | **Cursor sentinels:** `send` returns `DELIVERY_UNCONFIRMED` (exported) on a failed anchor, never a count; an unresolvable cursor reads EMPTY, never the whole transcript. (F46 transcript-unlocatable still reads empty — documented.) | F40, F46 |
 | **S12** | ✅ **done** | **Dup-prompt anchoring** — already correct: `anchorOwnTurn` iterates newest-first and excludes the pre-send id-set, so a duplicate prompt anchors the NEW record. | F41 |

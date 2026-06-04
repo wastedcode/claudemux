@@ -4,8 +4,9 @@
  *   CLAUDEMUX_SOCKET=claudemux-accept node scripts/acceptance-suite.mjs
  *
  * Scenarios: (A) multi-turn + cursor isolation, (B) tool-using turn phase/parts,
- * (C) hooks:false degraded read, (D) interrupt stops a turn. Each uses a throwaway
- * cwd + a uniquely-named, self-killed session. Needs an authenticated claude.
+ * (C) hooks:false degraded read, (D) interrupt stops a turn, (E) a >30s working
+ * turn is not falsely stuck. Each uses a throwaway cwd + a uniquely-named,
+ * self-killed session. Needs an authenticated claude.
  */
 import { mkdirSync } from "node:fs";
 import { create } from "../dist/index.js";
@@ -145,7 +146,41 @@ async function scenarioD() {
   }
 }
 
-for (const sc of [scenarioA, scenarioB, scenarioC, scenarioD]) {
+// E) A LONG working turn (>30s) is never falsely stuck — the long-build safety
+// property (S8/F17). The stuck detector's early-exit fires only on a frozen
+// `unknown` pane; a working turn keeps state=working (the live "esc to interrupt"
+// spinner) and the animating frame keeps the heartbeat alive, so wait() must
+// ride it out to `completed`, never `budget-exceeded{idle}`.
+async function scenarioE() {
+  console.log("\n[E] long working turn (>30s) is not falsely stuck\n");
+  const s = await fresh("acc-e");
+  try {
+    const t0 = Date.now();
+    await s.send(
+      "Do this as ONE turn, in the foreground, waiting for each step (do NOT background): " +
+        "run Bash `sleep 12; echo A`, then Bash `sleep 12; echo B`, then Bash `sleep 12; echo C`. " +
+        "Then reply DONE.",
+    );
+    const outcome = await s.wait({ timeoutMs: 180_000 });
+    const secs = (Date.now() - t0) / 1000;
+    rec(
+      "E",
+      "wait() rode out a long working turn to completed",
+      outcome.kind === "completed",
+      JSON.stringify(outcome),
+    );
+    rec(
+      "E",
+      "the turn genuinely spanned past the 30s stuck window",
+      secs > 30,
+      `${secs.toFixed(1)}s`,
+    );
+  } finally {
+    await s.kill();
+  }
+}
+
+for (const sc of [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE]) {
   try {
     await sc();
   } catch (e) {

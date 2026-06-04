@@ -26,6 +26,12 @@ const STUCK_MS = 30_000;
 
 interface WaitDeps {
   stabilize: typeof defaultStabilize;
+  /**
+   * No-progress window for the early blind-wedge exit ({@link STUCK_MS} in
+   * production). Injectable so the stuck contract is unit-testable without
+   * burning 30s of wall-clock; the handle never overrides it.
+   */
+  stuckMs?: number;
 }
 
 /**
@@ -70,6 +76,7 @@ export async function waitForOutcome(
   },
 ): Promise<TurnOutcome> {
   const budget = opts.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  const stuckMs = deps.stuckMs ?? STUCK_MS;
   const start = Date.now();
   // "armed" = evidence this turn ran (pane left idle, or diverged from the
   // post-submit baseline) — needed for the hooks-off path; the hook `stop` edge
@@ -117,11 +124,18 @@ export async function waitForOutcome(
     // ── policy sub-owner: budget / stuck ────────────────────────────────────
     if (now - start > budget) {
       // Recent progress ⇒ ran out of wall-clock ("max"); otherwise wedged ("idle").
-      return { kind: "budget-exceeded", reason: now - lastProgressAt < STUCK_MS ? "max" : "idle" };
+      return { kind: "budget-exceeded", reason: now - lastProgressAt < stuckMs ? "max" : "idle" };
     }
     // Early stuck: blind (no hook lifecycle, pane unrecognized) and nothing has
     // changed for the stuck window — fail fast rather than burn the full budget.
-    if (belief.state === "unknown" && !belief.toolInFlight && now - lastProgressAt > STUCK_MS) {
+    // Gated on `state==="unknown"` AND `!toolInFlight`: a `working` pane (the
+    // live spinner shows "esc to interrupt") or a tool in flight is NEVER early-
+    // stuck, no matter how long it runs — that is the long-build safety property.
+    // And `sinceProgress` keys on the pane fingerprint, so a still-animating
+    // spinner (its elapsed counter ticks) keeps resetting the heartbeat even
+    // when the frame classifies as `unknown` — only a genuinely FROZEN unknown
+    // pane reaches this.
+    if (belief.state === "unknown" && !belief.toolInFlight && now - lastProgressAt > stuckMs) {
       return { kind: "budget-exceeded", reason: "idle" };
     }
 
