@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  TmuxExec,
-  classifyTmuxFailure,
-  detectPaneDeadAnnotation,
-} from "../../../src/backends/tmux/exec.js";
+import { TmuxExec, classifyTmuxFailure } from "../../../src/backends/tmux/exec.js";
 import {
   hasSession,
   killSession,
@@ -71,30 +67,6 @@ describe("TmuxExec — discipline + spawn-time errors", () => {
     });
     expect(r.exit).not.toBe(0);
     expect(r.stderr.toLowerCase()).toContain("can't find session");
-  });
-
-  it("detectPaneDeadAnnotation detects death across platform signal renderings", () => {
-    // The cause inside the parens varies by platform / tmux version. Detection
-    // must fire on every form (no false negatives) and normalize the signal to
-    // a canonical, backend-neutral name. These are real annotation strings:
-    //   Linux  → numeric signal       macOS → signal NAME       normal exit → status
-    const linux = "blah\nblah\nPane is dead (signal 9, Tue Mar 5 10:00:00 2026)\n";
-    const macos = "blah\nPane is dead (signal kill, Wed Jun 3 00:33:31 2026)\n";
-    const term = "Pane is dead (signal TERM, Tue Mar 5 10:00:00 2026)\n";
-    const exited = "Pane is dead (status 0, Tue Mar 5 10:00:00 2026)\n";
-
-    expect(detectPaneDeadAnnotation(linux)?.signal).toBe("SIGKILL");
-    expect(detectPaneDeadAnnotation(macos)?.signal).toBe("SIGKILL");
-    expect(detectPaneDeadAnnotation(term)?.signal).toBe("SIGTERM");
-
-    // Normal exit: the pane IS dead — must be detected — but carries no signal.
-    expect(detectPaneDeadAnnotation(exited)).not.toBeNull();
-    expect(detectPaneDeadAnnotation(exited)?.signal).toBeUndefined();
-
-    // Not the annotation → null. And a mid-line mention must NOT false-positive
-    // (the annotation is anchored at line start, as tmux renders it).
-    expect(detectPaneDeadAnnotation("nothing of the sort")).toBeNull();
-    expect(detectPaneDeadAnnotation("a joke: the Pane is dead (lol) ha")).toBeNull();
   });
 });
 
@@ -217,37 +189,6 @@ describe("sessions module — namespace-isolated CRUD", () => {
     // Wait briefly for the process to exit and the session to be reaped.
     await new Promise((res) => setTimeout(res, 400));
     expect(await hasSession(exec, target)).toBe(false);
-  });
-
-  it("Case A (remain-on-exit on, opt-in for measurement): hasSession still true after exit; Pane is dead annotation visible", async () => {
-    const NAME = "case-a";
-    const target = targetOf(NS, NAME);
-    // Bring up a long-lived session, then deliberately flip remain-on-exit
-    // on AT THE WINDOW SCOPE to opt into the silent-success trap probe.
-    await newSession(exec, {
-      namespace: NS,
-      name: NAME,
-      cwd: h.sandbox.home,
-      cmd: "sleep",
-      argv: ["60"],
-    });
-    await exec.run(["set-window-option", "-t", target, "remain-on-exit", "on"], {
-      sessionName: target,
-    });
-    // Kill the inner process by signaling the pane's pid.
-    const pidR = await exec.run(["display-message", "-p", "-t", target, "#{pane_pid}"], {
-      sessionName: target,
-    });
-    const pidStr = pidR.stdout.trim();
-    expect(pidStr).toMatch(/^\d+$/);
-    process.kill(Number(pidStr), "SIGKILL");
-    await new Promise((res) => setTimeout(res, 300));
-    // Session is still present (remain-on-exit on).
-    expect(await hasSession(exec, target)).toBe(true);
-    // The pane-dead oracle: capture-pane stdout contains the annotation.
-    const cap = await exec.run(["capture-pane", "-p", "-t", target], { sessionName: target });
-    expect(detectPaneDeadAnnotation(cap.stdout)).not.toBeNull();
-    await killSession(exec, target);
   });
 
   it("applies the five per-session options (verifies escape-time + history-limit at minimum)", async () => {

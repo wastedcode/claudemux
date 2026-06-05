@@ -26,7 +26,6 @@ describe("public surface — exports", () => {
       "DialogStuck",
       "ReplTimeout",
       "LoginRequired",
-      "PaneDead",
       "SessionGone",
       "BackendUnreachable",
       "BackendError",

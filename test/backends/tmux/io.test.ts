@@ -7,7 +7,7 @@ import { TmuxExec } from "../../../src/backends/tmux/exec.js";
 import { pasteText, sendKey } from "../../../src/backends/tmux/keys.js";
 import { getSessionOption, setSessionOption } from "../../../src/backends/tmux/options.js";
 import { newSession, targetOf } from "../../../src/backends/tmux/sessions.js";
-import { PaneDead, SessionGone } from "../../../src/errors.js";
+import { SessionGone } from "../../../src/errors.js";
 import { Harness } from "../../harness/index.js";
 
 let h: Harness;
@@ -105,7 +105,7 @@ describe("sendKey", () => {
   });
 });
 
-describe("capturePane — bottom-N, ansi, pane-death", () => {
+describe("capturePane — bottom-N, ansi", () => {
   it("returns the live visible region (default) — no -S -N invocation", async () => {
     const observed: string[][] = [];
     exec.onCommand((e) => observed.push(e.argv));
@@ -168,27 +168,6 @@ describe("capturePane — bottom-N, ansi, pane-death", () => {
     if (!plain || !ansi) return;
     expect(plain.includes("-e")).toBe(false);
     expect(ansi.includes("-e")).toBe(true);
-  });
-
-  it("surfaces PaneDead from the Case-A annotation", async () => {
-    await newSession(exec, {
-      namespace: NS,
-      name: "cap-dead",
-      cwd: h.sandbox.home,
-      cmd: "sleep",
-      argv: ["60"],
-    });
-    const target = targetOf(NS, "cap-dead");
-    await exec.run(["set-window-option", "-t", target, "remain-on-exit", "on"], {
-      sessionName: target,
-    });
-    const pidR = await exec.run(["display-message", "-p", "-t", target, "#{pane_pid}"], {
-      sessionName: target,
-    });
-    process.kill(Number(pidR.stdout.trim()), "SIGKILL");
-    await new Promise((res) => setTimeout(res, 300));
-    await expect(capturePane(exec, target)).rejects.toThrow(PaneDead);
-    await exec.run(["kill-session", "-t", target], { sessionName: target });
   });
 });
 

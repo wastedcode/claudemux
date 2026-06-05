@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { constants as osConstants } from "node:os";
 import { BackendError, BackendUnreachable, SessionExists, SessionGone } from "../../errors.js";
 import { Emitter } from "../../util/emitter.js";
 import type { BackendEvent } from "../types.js";
@@ -91,12 +90,9 @@ export class TmuxExec {
   }
 
   /**
-   * Spawn `tmux -L <socket> -f /dev/null <args...>` and capture both streams.
-   *
-   * Reading both stdout and stderr is required — the `Pane is dead` annotation
-   * lands on stdout (Case A), while `can't find …` lands on stderr (Case B).
-   * A wrapper that reads only one stream misses one case (see
-   * `engineer/wiki/tmux-pane-death-detection`).
+   * Spawn `tmux -L <socket> -f /dev/null <args...>` and capture both streams —
+   * stdout for the op's payload (e.g. `capture-pane`), stderr for failure
+   * classification (`can't find …` → `SessionGone`, etc.).
    *
    * @throws `BackendUnreachable` — `spawn-failed` on spawn error (ENOENT,
    *   EPIPE), `no-server` when the server isn't running on a connect-only
@@ -275,54 +271,4 @@ export async function runForSession(
     throw classified;
   }
   return r;
-}
-
-/**
- * Detail surfaced when a `Pane is dead (…)` annotation is present.
- */
-export interface PaneDeadInfo {
-  /**
-   * Canonical signal name (e.g. `"SIGKILL"`) if the pane was killed by a
-   * signal that could be identified; undefined for a normal exit (`status N`)
-   * or an unrecognized token. Detection never depends on this — see below.
-   */
-  readonly signal: string | undefined;
-}
-
-/**
- * Detect tmux's `Pane is dead (…)` annotation (Case A, `remain-on-exit on`).
- * Returns {@link PaneDeadInfo} when the pane is dead, else `null`.
- *
- * Detection anchors ONLY on the stable `Pane is dead (` line prefix. The
- * parenthetical cause varies by platform and tmux version — `signal 9`
- * (Linux), `signal kill` (macOS), `status N` (normal exit) — so gating
- * detection on parsing it would read a dead pane as alive: a false negative.
- * The cause is parsed best-effort into a canonical signal name; an
- * unparseable cause still reports the pane as dead.
- */
-export function detectPaneDeadAnnotation(stdout: string): PaneDeadInfo | null {
-  if (!/^Pane is dead \(/m.test(stdout)) return null;
-  const token = stdout.match(/^Pane is dead \(signal ([^,)]+)/m)?.[1];
-  return { signal: token ? normalizeSignal(token.trim()) : undefined };
-}
-
-/**
- * Normalize a tmux signal token — a number (`"9"`) or a name (`"kill"`,
- * `"KILL"`, `"SIGKILL"`) — to its canonical name (`"SIGKILL"`). Backed by
- * Node's `os.constants.signals` (no hand-maintained table); names are the
- * platform-stable identity, since signal *numbers* differ across OSes.
- * Returns undefined for an unrecognized token.
- */
-function normalizeSignal(token: string): string | undefined {
-  const signals = osConstants.signals as Record<string, number>;
-  if (/^\d+$/.test(token)) {
-    const n = Number(token);
-    for (const [name, num] of Object.entries(signals)) {
-      if (num === n) return name;
-    }
-    return undefined;
-  }
-  const upper = token.toUpperCase();
-  const candidate = upper.startsWith("SIG") ? upper : `SIG${upper}`;
-  return candidate in signals ? candidate : undefined;
 }

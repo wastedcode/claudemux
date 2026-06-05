@@ -21,7 +21,6 @@
 import {
   type AgentDef,
   LoginRequired,
-  PaneDead,
   SessionGone,
   type SessionHandle,
   adopt,
@@ -89,9 +88,9 @@ async function recover(name: string, p: Persisted): Promise<SessionHandle> {
   try {
     st = await session.state();
   } catch (err) {
-    if (err instanceof PaneDead) {
-      // State C — the pane container survives but its process is dead. Kill the
-      // husk, then resume in a fresh pane.
+    if (err instanceof SessionGone) {
+      // State C — the pane vanished between adopt() and this read (a mid-check
+      // crash). kill() is idempotent; resume in a fresh pane.
       await session.kill();
       return reattachFresh(name, p);
     }

@@ -20,7 +20,6 @@ export {
   InvalidAgentSessionId,
   InvalidSessionName,
   LoginRequired,
-  PaneDead,
   PromptResponseUnsupported,
   ReplTimeout,
   SessionExists,

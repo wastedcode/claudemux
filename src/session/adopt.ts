@@ -35,8 +35,8 @@ export interface AdoptOptions {
  * the mirror of {@link create}. Pure attach: no spawn, no boot, no dialog dismissal.
  *
  * After a successful adopt the consumer MUST call `state()` before driving the
- * pane (covers wedged / PaneDead / mid-dialog). See README §adopt for the A/B/C
- * recovery taxonomy and the single-writer invariant.
+ * pane (covers wedged / mid-dialog). See README §adopt for the A/B/C recovery
+ * taxonomy and the single-writer invariant.
  *
  * @throws `InvalidSessionName` if `name`/`namespace` contain reserved characters
  *   (thrown before the exists-check).
