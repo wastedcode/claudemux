@@ -34,8 +34,7 @@ export type IdleState = Extract<State, "idle" | "permission-prompt" | "dialog">;
  * **Compound ownership.** `wait()` is the *one* owner of this decision and it
  * COMPOSES two atomic sub-owners without re-deriving their internals:
  *   - the **observe** sub-owner (the Observer's fused belief from hooks +
- *     transcript + pane) yields `completed` / `awaiting` / `aborted` /
- *     `degraded`;
+ *     transcript + pane) yields `completed` / `awaiting` / `aborted`;
  *   - the **policy** sub-owner — the **consumer's** patience, passed as
  *     {@link ReadyOpts} — yields `budget-exceeded`: `reason:"idle"` (no progress
  *     for `idleMs`) vs `"max"` (wall-clock `timeoutMs` elapsed). The library owns
@@ -52,8 +51,7 @@ export type TurnOutcome =
   | { readonly kind: "completed" }
   | { readonly kind: "awaiting"; readonly on: "permission-prompt" | "dialog" }
   | { readonly kind: "aborted" }
-  | { readonly kind: "budget-exceeded"; readonly reason: "idle" | "max" }
-  | { readonly kind: "degraded" };
+  | { readonly kind: "budget-exceeded"; readonly reason: "idle" | "max" };
 
 /**
  * A single conversation message, **backend-neutral** — never the agent's raw

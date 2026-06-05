@@ -15,7 +15,7 @@ import { formatSessionLabel } from "./ref.js";
  *   - `fresh` (`create`): a minted or caller-chosen `sessionId` → `--session-id`.
  *   - `resume`: an existing `agentSessionId` → the agent's resume flag.
  */
-export type SpawnIdentity =
+type SpawnIdentity =
   | { readonly mode: "fresh"; readonly sessionId: string; readonly explicit: boolean }
   | { readonly mode: "resume"; readonly agentSessionId: string };
 

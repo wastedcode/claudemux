@@ -15,8 +15,8 @@ import type { Cursor, Message, ReadyOpts, SessionHandle, TurnOutcome } from "./t
 export interface AskResult {
   /**
    * The terminal {@link TurnOutcome}, surfaced in full — never swallowed.
-   * `completed` is the happy path; `awaiting`/`aborted`/`budget-exceeded`/
-   * `degraded` are first-class and the caller must branch on them.
+   * `completed` is the happy path; `awaiting`/`aborted`/`budget-exceeded` are
+   * first-class and the caller must branch on them.
    */
   readonly outcome: TurnOutcome;
   /**
@@ -43,7 +43,7 @@ export interface AskResult {
  * const session = await create({ name: "job", cwd: process.cwd() });
  * const { outcome, messages } = await ask(session, "What's 2+2?");
  * if (outcome.kind === "completed") console.log(messages.at(-1));
- * else handleAbnormal(outcome); // awaiting / aborted / budget-exceeded / degraded
+ * else handleAbnormal(outcome); // awaiting / aborted / budget-exceeded
  * ```
  */
 export async function ask(

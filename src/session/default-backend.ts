@@ -58,8 +58,3 @@ export function sharedDefaultBackend(): Backend {
 export function backendWithSocket(socket: string): Backend {
   return tmuxBackend({ socket });
 }
-
-/** Test-only hook to reset the shared backend so each test gets a fresh socket. */
-export function resetDefaultBackendForTesting(): void {
-  cached = null;
-}

@@ -132,7 +132,11 @@ async function f22() {
     execSync(`tmux -L ${SOCK} -f /dev/null kill-session -t ${target}`);
     await sleep(500);
 
-    rec("F22", "the crashed session is gone", (await exists({ name: aName, namespace: NS })) === false);
+    rec(
+      "F22",
+      "the crashed session is gone",
+      (await exists({ name: aName, namespace: NS })) === false,
+    );
     rec(
       "F22",
       "the BYSTANDER survived a single-pane crash (fleet not taken down)",
@@ -149,14 +153,30 @@ async function f22() {
     // …then resume into a fresh pane from the persisted id.
     const a2 = await resume({ ...opts(`f22r-${Date.now().toString(36)}`), agentSessionId: id });
     rec("F22", "resume recovers idle state, not stale 'working'", (await a2.state()) === "idle");
-    rec("F22", "turnComplete(in-flight) === false → re-send it", (await a2.turnComplete(cEssay)) === false);
-    rec("F22", "turnComplete(earlier) === true → leave it", (await a2.turnComplete(cPlant)) === true);
+    rec(
+      "F22",
+      "turnComplete(in-flight) === false → re-send it",
+      (await a2.turnComplete(cEssay)) === false,
+    );
+    rec(
+      "F22",
+      "turnComplete(earlier) === true → leave it",
+      (await a2.turnComplete(cPlant)) === true,
+    );
     const cRetry = await a2.send("Write a 3-word note about Unix. Output it now.");
     const out = await a2.wait();
-    rec("F22", "re-sent in-flight turn completes", out.kind === "completed" && (await a2.turnComplete(cRetry)) === true);
+    rec(
+      "F22",
+      "re-sent in-flight turn completes",
+      out.kind === "completed" && (await a2.turnComplete(cRetry)) === true,
+    );
     const c = await a2.send("What was the secret word? One word.");
     await a2.wait();
-    rec("F22", "the pre-crash conversation survived (KIWI recalled)", txt(await a2.messagesSince(c)).includes("KIWI"));
+    rec(
+      "F22",
+      "the pre-crash conversation survived (KIWI recalled)",
+      txt(await a2.messagesSince(c)).includes("KIWI"),
+    );
     await a2.kill();
   } finally {
     await a.kill().catch(() => undefined);
@@ -174,7 +194,12 @@ async function frecover() {
   await s.wait();
   // (1) pane ALIVE → recover attaches.
   const r1 = await recover({ ...opts(a), agentSessionId: id });
-  rec("REC", "recover() on a live session → status 'attached'", r1.status === "attached", r1.status);
+  rec(
+    "REC",
+    "recover() on a live session → status 'attached'",
+    r1.status === "attached",
+    r1.status,
+  );
   // Crash A's pane (close the session).
   const names = execSync(`tmux -L ${SOCK} -f /dev/null list-sessions -F '#{session_name}'`)
     .toString()
@@ -183,7 +208,12 @@ async function frecover() {
   await sleep(500);
   // (2) pane GONE → recover resumes the SAME conversation in a fresh pane.
   const r2 = await recover({ ...opts(a), agentSessionId: id });
-  rec("REC", "recover() on a crashed session → status 'resumed'", r2.status === "resumed", r2.status);
+  rec(
+    "REC",
+    "recover() on a crashed session → status 'resumed'",
+    r2.status === "resumed",
+    r2.status,
+  );
   const c = await r2.session.send("What was the word? One word.");
   await r2.session.wait();
   rec(

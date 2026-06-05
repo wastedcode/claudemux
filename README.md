@@ -83,7 +83,7 @@ const session: SessionHandle = await create({ name: "job", cwd: process.cwd() })
 // One round-trip — the 90% path:
 const { outcome, messages } = await ask(session, "Add a CHANGELOG entry");
 if (outcome.kind === "completed") console.log(messages.at(-1));
-else handleAbnormal(outcome);   // awaiting | aborted | budget-exceeded | degraded
+else handleAbnormal(outcome);   // awaiting | aborted | budget-exceeded
 
 await session.kill();
 ```
@@ -98,7 +98,6 @@ switch (outcome.kind) {
   case "awaiting":         outcome.on; /* "permission-prompt" | "dialog" */ break;
   case "aborted":          break;                       // an interrupt() stopped it
   case "budget-exceeded":  outcome.reason; /* "idle" (stuck) | "max" (wall-clock) */ break;
-  case "degraded":         break;                       // observe channels can't form a confident belief
 }
 ```
 
@@ -241,9 +240,9 @@ import {
   SessionExists,         // create() collision; never silently adopts
   LoginRequired,         // claude isn't authenticated; run `claude` interactively first
   DialogStuck,           // a known dialog matched but didn't advance after the response
-  ReplTimeout,           // boot or wait budget elapsed before the state settled
-  PaneDead,              // the pane's process died (with the signal)
-  SessionGone,           // the session vanished from the backend
+  ReplTimeout,           // boot budget elapsed before the REPL settled (wait() returns budget-exceeded, never throws)
+  SessionGone,           // the session vanished from the backend (a crash, a kill, or the server died) — every per-session op
+  TranscriptUnlocatable, // a read on a session whose transcript can't be located (no recoverable id / hook path)
   AgentExitedDuringBoot, // the agent exited before ready — usually an agentSessionId collision
   InvalidSessionName,    // name was empty, too long, or had illegal characters
   InvalidAgentSessionId, // a supplied agentSessionId wasn't a v4 UUID
@@ -344,11 +343,10 @@ const where = await session.state();             // ← ALWAYS do this before yo
 
 | Symptom after `adopt()` | State | What happened | Recovery |
 |---|---|---|---|
-| `adopt()` throws `SessionGone` | **A** | the process exited — a crashed `claude` tears down the whole session, so absence is clean | `resume({ name, cwd, agentSessionId })` |
-| handle returned, but `state()`/`wait()` never settles | **B** | the pane is attached but **wedged** | `kill()` **then** `resume(…)` |
-| handle returned, but `capture()`/`state()` throws `PaneDead` | **C** | the pane container survives but its **process is dead** | `kill()` + `resume(…)` |
+| `adopt()` throws `SessionGone` | **A** | the process exited — a crashed `claude` tears down the whole session (the substrate runs `remain-on-exit off`, so a dead pane is reaped, never left as a husk), so absence is clean | `resume({ name, cwd, agentSessionId })` |
+| handle returned, but `state()`/`wait()` never settles, or `state()` throws `SessionGone` mid-check | **B** | the pane is attached but **wedged**, or vanished between adopt and the read | `kill()` **then** `resume(…)` |
 
-The full recovery loop — adopt, then fall back to `resume()` for each of A/B/C — is in [`examples/adopt-after-restart.ts`](./examples/adopt-after-restart.ts). `adopt()` re-establishes and re-verifies **nothing**: it inherits whatever authority context the original `create()` set up (trusted folders, permission mode, MCP) — it does not re-grant or re-check any of it.
+The full recovery loop — adopt, then fall back to `resume()` — is in [`examples/adopt-after-restart.ts`](./examples/adopt-after-restart.ts). (Or just call `recover()`, which does this whole dance and tells you `attached` vs `resumed`.) `adopt()` re-establishes and re-verifies **nothing**: it inherits whatever authority context the original `create()` set up (trusted folders, permission mode, MCP) — it does not re-grant or re-check any of it.
 
 #### Persist *two* things per session — one fails loud, the other fails silent
 
@@ -389,7 +387,6 @@ Because a cleanly-down backend server reports `false` for *every* session, all y
 | `awaiting` | Paused on a modal only the pane sees — `outcome.on ∈ {permission-prompt, dialog}`. |
 | `aborted` | An `interrupt()` stopped it. |
 | `budget-exceeded` | One of **your** patience bounds ran out — `outcome.reason: "idle"` (no progress for `idleMs`) vs `"max"` (wall-clock `maxMs`). **Not "failed"** — poll again, don't blindly re-send. |
-| `degraded` | The observe channels can't form a confident belief. |
 
 `wait()` is the compound owner of the done-decision: it composes the Observer's belief with **your** patience. The library owns **none** — there is no default timeout. Pass `wait({ maxMs })` (wall-clock cap), `wait({ idleMs })` (give up after no progress for that long — a *working* turn or a tool in flight never trips it, only a genuinely stuck one), or both; with neither, `wait()` blocks until a terminal outcome and never invents a deadline. "Time is the policy's." (`progress()` is the same belief without the wait — `{ phase, toolInFlight, transcriptCount, hookChannelHealthy, agentChannelHealthy, state }`; poll it and apply your own patience if you'd rather not block. `agentChannelHealthy: false` is the **drift canary** — every observe channel came up blind against a non-empty pane, the signature of a Claude Code version moving the format out from under the parsers; treat persistent `false` as "re-check your version assumptions.")
 

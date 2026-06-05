@@ -76,14 +76,23 @@ describe("runForSession — canonical per-session failure mapping (the read/writ
 
   it("no-server REJECTION → SessionGone (a per-session op on a dead server = this session is gone)", async () => {
     const e = exec(() => Promise.reject(noServer()));
-    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(SessionGone);
+    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(
+      SessionGone,
+    );
   });
 
   it("no-server RETURNED result → SessionGone too (belt-and-braces)", async () => {
     const e = exec(() =>
-      Promise.resolve({ exit: 1, stdout: "", stderr: "no server running on /tmp/s", durationMs: 1 }),
+      Promise.resolve({
+        exit: 1,
+        stdout: "",
+        stderr: "no server running on /tmp/s",
+        durationMs: 1,
+      }),
     );
-    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(SessionGone);
+    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(
+      SessionGone,
+    );
   });
 
   it("a REAL backend fault (spawn-failed) is NOT remapped — it stays BackendUnreachable", async () => {
@@ -101,7 +110,9 @@ describe("runForSession — canonical per-session failure mapping (the read/writ
     const weird = exec(() =>
       Promise.resolve({ exit: 1, stdout: "", stderr: "no space left on device", durationMs: 1 }),
     );
-    await expect(runForSession(weird, ["capture-pane"], "ns/x")).rejects.toBeInstanceOf(BackendError);
+    await expect(runForSession(weird, ["capture-pane"], "ns/x")).rejects.toBeInstanceOf(
+      BackendError,
+    );
     const ok = exec(() => Promise.resolve({ exit: 0, stdout: "PANE", stderr: "", durationMs: 1 }));
     expect((await runForSession(ok, ["capture-pane"], "ns/x")).stdout).toBe("PANE");
   });

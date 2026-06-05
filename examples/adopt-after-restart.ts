@@ -64,8 +64,11 @@ async function reattachFresh(name: string, p: Persisted): Promise<SessionHandle>
   });
 }
 
-/** Re-adopt one persisted session, walking the A/B/C recovery decision tree. */
-async function recover(name: string, p: Persisted): Promise<SessionHandle> {
+// This shows the recovery dance by hand (adopt → state() → resume) AND adds a
+// wedged-pane (state B) check the `recover()` compound deliberately leaves to you.
+// If you just need attach-or-resume, call `recover()` instead of all of this.
+/** Re-adopt one persisted session, walking the A (gone) / B (wedged) decision tree. */
+async function reattachOne(name: string, p: Persisted): Promise<SessionHandle> {
   const agent = AGENTS[p.agentDefId] ?? claude;
 
   let session: SessionHandle;
@@ -89,8 +92,8 @@ async function recover(name: string, p: Persisted): Promise<SessionHandle> {
     st = await session.state();
   } catch (err) {
     if (err instanceof SessionGone) {
-      // State C — the pane vanished between adopt() and this read (a mid-check
-      // crash). kill() is idempotent; resume in a fresh pane.
+      // Also State A — the pane vanished between adopt() and this read (a
+      // mid-check crash). kill() is idempotent; resume in a fresh pane.
       await session.kill();
       return reattachFresh(name, p);
     }
@@ -117,7 +120,7 @@ async function main(): Promise<void> {
     // re-creating, or you re-spawn N sessions against a just-restarted host. This
     // loop recovers one at a time for clarity; a batch recoverer must back off.
     for (const [name, persisted] of Object.entries(store)) {
-      const session = await recover(name, persisted);
+      const session = await reattachOne(name, persisted);
       process.stdout.write(`recovered ${name} → ${await session.state()}\n`);
     }
   } catch (err) {
