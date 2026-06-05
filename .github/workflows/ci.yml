@@ -109,11 +109,10 @@ jobs:
       - name: Verify tmux version
         run: tmux -V
 
-      - name: Install claude (for integration tests)
-        run: |
-          curl -fsSL https://claude.ai/install.sh | bash
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
+      # No `claude` install: the suite is hermetic. Real-claude tests (pre-auth
+      # boot + the post-auth `*.live.test.ts` set) are gated out of `npm test`
+      # and run only as acceptance — see scripts/*.mjs and the CLAUDEMUX_LIVE_*
+      # env flags. CI exercises real tmux, never real claude.
       - run: npm ci
       - run: npm run build
       - run: npm test

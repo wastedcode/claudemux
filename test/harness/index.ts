@@ -46,14 +46,14 @@ const CURATED_PATH = [NODE_BIN_DIR, TMUX_BIN_DIR, "/usr/local/bin", "/usr/bin", 
 
 /**
  * Directory holding the real `claude` binary, resolved from the *ambient* PATH
- * — the one sanctioned exception to the curated-env rule. The pre-auth boot
- * tests need claude's actual location injected onto the otherwise-hermetic
- * PATH so they can reach an installed-but-unauthenticated claude (per ADR 0005:
- * CI installs claude, never logs in; the pre-auth LoginRequired path is what CI
- * exercises). Resolve it — never hardcode a home: on a dev box claude is on PATH
- * at $HOME/.local/bin; in CI the install step adds the same to $GITHUB_PATH, but
- * the literal home differs (/home/runner, /Users/runner). Hardcoding one box's
- * path is the exact PATH-mismatch ADR 0005 flagged.
+ * — the one sanctioned exception to the curated-env rule. Only the **gated**
+ * pre-auth boot tests (`CLAUDEMUX_LIVE_BOOT=1`) use this to reach an
+ * installed-but-unauthenticated claude; the default `npm test`/CI run never
+ * boots claude (it's hermetic — real tmux only), so this is dead weight there
+ * and live only on demand. Resolve it — never hardcode a home: on a dev box
+ * claude is on PATH at $HOME/.local/bin, and the literal home differs across
+ * machines (/home/runner, /Users/...). Hardcoding one box's path is the exact
+ * PATH-mismatch ADR 0005 flagged.
  */
 export function claudeBinDir(): string {
   // Canonical install location (claude.ai/install.sh → $HOME/.local/bin).

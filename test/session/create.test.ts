@@ -4,6 +4,12 @@ import { LoginRequired, SessionExists } from "../../src/errors.js";
 import { create } from "../../src/session/create.js";
 import { Harness, claudeBinDir } from "../harness/index.js";
 
+// Real-claude boot is out of the hermetic gate (no `claude` in `npm test`/CI).
+// The pre-auth block below spawns the installed-but-logged-OUT claude binary;
+// run it deliberately with CLAUDEMUX_LIVE_BOOT=1 — acceptance-tier, not a unit
+// test (its LoginRequired-vs-WorkspaceUntrusted ordering is OS-dependent).
+const LIVE_BOOT = process.env.CLAUDEMUX_LIVE_BOOT === "1";
+
 let h: Harness;
 
 beforeEach(() => {
@@ -39,29 +45,32 @@ describe("create() — SessionExists collision", () => {
   });
 });
 
-describe("create() — pre-auth boot path against real claude (LoginRequired clean throw)", () => {
-  it("dismisses theme picker, then surfaces LoginRequired from login-method dialog", async () => {
-    // The sandbox HOME has no ~/.claude/credentials.* — claude shows theme
-    // picker first, then login method. The substrate boots the theme picker
-    // automatically (Enter) and then must throw LoginRequired.
-    const backend = tmuxBackend({ socket: h.socket });
-    const env = {
-      ...h.env,
-      PATH: `${claudeBinDir()}:${h.env.PATH}`,
-    };
+describe.skipIf(!LIVE_BOOT)(
+  "create() — pre-auth boot path against real claude (CLAUDEMUX_LIVE_BOOT=1)",
+  () => {
+    it("dismisses theme picker, then surfaces LoginRequired from login-method dialog", async () => {
+      // The sandbox HOME has no ~/.claude/credentials.* — claude shows theme
+      // picker first, then login method. The substrate boots the theme picker
+      // automatically (Enter) and then must throw LoginRequired.
+      const backend = tmuxBackend({ socket: h.socket });
+      const env = {
+        ...h.env,
+        PATH: `${claudeBinDir()}:${h.env.PATH}`,
+      };
 
-    await expect(
-      create({
-        name: "preauth",
-        cwd: h.sandbox.home,
-        backend,
-        env,
-        bootTimeoutMs: 45_000,
-      }),
-    ).rejects.toThrow(LoginRequired);
+      await expect(
+        create({
+          name: "preauth",
+          cwd: h.sandbox.home,
+          backend,
+          env,
+          bootTimeoutMs: 45_000,
+        }),
+      ).rejects.toThrow(LoginRequired);
 
-    // create() best-effort kills the session on boot failure — verify gone.
-    const exists = await backend.exists({ namespace: "claudemux", name: "preauth" });
-    expect(exists).toBe(false);
-  }, 60_000);
-});
+      // create() best-effort kills the session on boot failure — verify gone.
+      const exists = await backend.exists({ namespace: "claudemux", name: "preauth" });
+      expect(exists).toBe(false);
+    }, 60_000);
+  },
+);

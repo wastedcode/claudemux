@@ -15,6 +15,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
 const binPath = join(repoRoot, "bin", "claudemux");
 
+// Real-claude boot is out of the hermetic gate (no `claude` in `npm test`/CI).
+// The block below spawns the installed-but-logged-OUT claude binary; run it
+// deliberately with CLAUDEMUX_LIVE_BOOT=1 — it's an acceptance-tier check, not
+// a unit test. (Its LoginRequired-vs-WorkspaceUntrusted gate ordering is
+// OS-dependent — the exact fragility that doesn't belong in the gate.)
+const LIVE_BOOT = process.env.CLAUDEMUX_LIVE_BOOT === "1";
+
 interface CliResult {
   exit: number;
   stdout: string;
@@ -156,14 +163,17 @@ describe("CLI — unknown agent surfaces a typed error", () => {
   });
 });
 
-describe("CLI — spawn against real claude in sandbox surfaces LoginRequired cleanly", () => {
-  it("spawn <name> --cwd in a fresh sandbox HOME exits non-zero with LoginRequired", async () => {
-    const path = `${claudeBinDir()}:${h.env.PATH}`;
-    const r = await runCli(
-      ["spawn", "preauth", "--cwd", h.sandbox.home, "--boot-timeout-ms", "45000"],
-      { PATH: path },
-    );
-    expect(r.exit).not.toBe(0);
-    expect(r.stderr.toLowerCase()).toContain("not authenticated");
-  }, 60_000);
-});
+describe.skipIf(!LIVE_BOOT)(
+  "CLI — spawn against real claude → LoginRequired (CLAUDEMUX_LIVE_BOOT=1)",
+  () => {
+    it("spawn <name> --cwd in a fresh sandbox HOME exits non-zero with LoginRequired", async () => {
+      const path = `${claudeBinDir()}:${h.env.PATH}`;
+      const r = await runCli(
+        ["spawn", "preauth", "--cwd", h.sandbox.home, "--boot-timeout-ms", "45000"],
+        { PATH: path },
+      );
+      expect(r.exit).not.toBe(0);
+      expect(r.stderr.toLowerCase()).toContain("not authenticated");
+    }, 60_000);
+  },
+);
