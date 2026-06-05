@@ -1,7 +1,16 @@
 # 0007. `PaneDead` detection anchors on the annotation prefix; the signal is a canonical name, not a number
 
-**Status:** accepted
+**Status:** superseded (2026-06-05, by the `SessionGone` canonicalization — see ADR 0005 / CHANGELOG 0.2.0)
 **Date:** 2026-06-03
+
+> **Superseded — `PaneDead` no longer exists.** The backend runs
+> `remain-on-exit off`, so a dead pane is **reaped**, not left as a husk; there
+> is no annotation to detect. Every per-session op against a reaped session now
+> raises the canonical `SessionGone` (via `runForSession`). The `PaneDead` class,
+> `detectPaneDeadAnnotation`, `normalizeSignal`, and `PaneDeadInfo` were all
+> deleted. The rest of this record is retained as history (the macOS-vs-Linux
+> signal-rendering finding still informs how we parse platform-divergent tmux
+> output).
 
 ## Context
 

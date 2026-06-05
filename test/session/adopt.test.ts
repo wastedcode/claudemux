@@ -109,8 +109,8 @@ describe("adopt() — #1 round-trip against a live pane", () => {
     await expect.poll(() => session.capture()).toContain("ROUNDTRIP_OK");
     // state classifies the live pane without throwing
     await expect(session.state()).resolves.toBeTypeOf("string");
-    // send delivers a turn without throwing
-    await expect(session.send("noop")).resolves.toBeUndefined();
+    // send delivers a turn without throwing, returning a cursor anchor
+    await expect(session.send("noop")).resolves.toBeTypeOf("string");
 
     await backend.kill({ namespace: NS, name: "rt" });
   });

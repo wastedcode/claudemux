@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { CLASSIFIER_BOTTOM_N } from "../session/constants.js";
+import { CLASSIFIER_CAPTURE } from "../session/constants.js";
 import { sleep } from "../util/sleep.js";
 
 /**
@@ -58,7 +58,7 @@ export async function captureSendBaseline(
   while (Date.now() < deadline) {
     let text: string;
     try {
-      text = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+      text = await backend.capture(ref, CLASSIFIER_CAPTURE);
     } catch {
       return undefined; // pane unreadable — let wait fall back to working-arm
     }

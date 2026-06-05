@@ -32,7 +32,7 @@ export interface BackendEvent {
  */
 export type SendPayload =
   | { kind: "paste"; text: string }
-  | { kind: "key"; key: "Enter" | "Escape" | "1" | "2" | "y" | "n" };
+  | { kind: "key"; key: "Enter" | "Escape" | "1" | "2" | "3" | "y" | "n" };
 
 /**
  * Identifier for one named session. Every Backend method takes this shape
@@ -61,7 +61,7 @@ export function formatSessionLabel(ref: SessionRef): string {
 
 /**
  * The substrate's view of one named pane in a backend. Implemented by
- * `src/backends/tmux/index.ts` for v0.0.1; future backends (node-pty,
+ * `src/backends/tmux/index.ts` currently; future backends (node-pty,
  * `CustomPaneBackend`) implement the same interface.
  */
 export interface Backend {

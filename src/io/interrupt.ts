@@ -44,9 +44,9 @@ const INTERRUPT_SETTLE_MS = 250;
  * restores the interrupted message back into the composer, and the classifier
  * reads that frame as `unknown` (never `idle`, never `working`). Two
  * consequences the consumer must know:
- *   - Do **not** `wait()`-for-idle after interrupt(): there is no turn in
- *     flight, no baseline was written, and the frame is `unknown`, so `wait()`
- *     never settles (→ `ReplTimeout`).
+ *   - `wait()` after interrupt() resolves `{ kind: "aborted" }` immediately (the
+ *     handle records the interrupt authoritatively) — it does NOT hang waiting for
+ *     an idle that won't come.
  *   - Do **not** naively `send()` a replacement after interrupt(): `send`
  *     pastes into the *non-empty* composer (the restored message), so the
  *     submission is the two texts concatenated. For a clean "interrupt and

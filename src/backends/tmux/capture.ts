@@ -1,5 +1,4 @@
-import { PaneDead } from "../../errors.js";
-import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./exec.js";
+import { type TmuxExec, runForSession } from "./exec.js";
 
 /**
  * Capture the named session's pane text.
@@ -14,9 +13,10 @@ import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./
  * `-e` flag is added only when the caller passes `ansi: true`; the default
  * is plain text (which is what the classifier matches against anyway).
  *
- * If the capture output contains the `Pane is dead (…)` annotation (Case A,
- * when `remain-on-exit` is `on`), `PaneDead` is thrown — regardless of how the
- * cause renders (`signal 9` / `signal kill` / `status N`).
+ * A gone session surfaces as `SessionGone` via {@link runForSession} (the
+ * canonical per-session mapping). The substrate runs `remain-on-exit off`, so a
+ * dead pane is reaped rather than left annotated — there is no separate
+ * pane-dead path to handle.
  */
 export async function capturePane(
   exec: TmuxExec,
@@ -28,16 +28,9 @@ export async function capturePane(
   if (opts.ansi === true) args.push("-e");
   args.push("-t", target);
 
-  const r = await exec.run(args, { sessionName: label });
-  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
-  if (err) throw err;
-
-  // Surface Case A pane-death loudly — Case B (session gone) is already
-  // surfaced by classifyTmuxFailure above. The annotation lands in stdout.
-  const dead = detectPaneDeadAnnotation(r.stdout);
-  if (dead !== null) {
-    throw new PaneDead(label, dead.signal);
-  }
+  // Per-session read: a dead server means THIS session is gone (canonical
+  // SessionGone), matching the write path — not a divergent BackendUnreachable.
+  const r = await runForSession(exec, args, label);
 
   if (opts.lines !== undefined && opts.lines > 0) {
     const lines = r.stdout.split("\n");

@@ -1,4 +1,5 @@
 import type { ClassifierRules } from "../state/types.js";
+import type { Message, PromptChoice } from "../types.js";
 
 /**
  * A single boot dialog: how to recognize it and how to respond.
@@ -76,6 +77,14 @@ export interface AgentDef {
     extraArgs?: string[];
     sessionId?: string;
     sessionIdExplicit?: boolean;
+    /**
+     * Neutral "resume this existing conversation" request from the session
+     * layer's `resume()`. The agent maps it to its own resume flag (claude:
+     * `--resume <id>`) and surfaces that id as `agentSessionId`. Mutually
+     * exclusive with `sessionId`/an `extraArgs` identity flag (choosing the id
+     * twice → typed conflict). Keeps the vendor flag inside the agent seam.
+     */
+    resumeFrom?: string;
     sessionName?: string;
   }): {
     cmd: string;
@@ -99,4 +108,146 @@ export interface AgentDef {
 
   /** Classifier predicates for this agent. */
   readonly rules: ClassifierRules;
+
+  /**
+   * Permission-prompt handling — how to *answer* the tool-approval menu the
+   * classifier detects via `rules.permissionPrompt`. The SOLE owner of this
+   * agent's menu option-order (claude: `1` approve-once / `2` approve-for-session
+   * / `3` deny), so the neutral {@link PromptChoice} → keystroke mapping stays
+   * out of the agent-agnostic layers (grep-enforced, like the dialog keys). The
+   * handle's `respond(choice)` calls {@link respondKey} and fires the returned
+   * key; one keystroke selects-and-confirms (no Enter — verified against
+   * authenticated claude 2.1.162).
+   *
+   * Optional: an agent that declares none has `respond()` throw
+   * `PromptResponseUnsupported` rather than the substrate guessing a digit (a
+   * wrong guess could pick "allow all"). Pairs with a non-empty
+   * `rules.permissionPrompt` — detection without an answer mapping would surface
+   * `awaiting{permission-prompt}` with no way to act on it.
+   */
+  readonly permissionPrompt?: {
+    /** The keystroke that selects {@link PromptChoice} in this agent's menu. */
+    respondKey(choice: PromptChoice): "1" | "2" | "3";
+  };
+
+  /**
+   * Reading the agent's session transcript. The **sole owner** of this agent's
+   * transcript knowledge — both *where* the file lives and *how* its records
+   * parse — so every claude-version-fragile bit stays in one file
+   * (grep-enforced). The agent-agnostic Observer reads the file and feeds its
+   * lines here; it never knows the schema or the path rule.
+   *
+   * Optional by **graceful degrade**, not by incompleteness: the Observer has
+   * landed and uses this whenever it's present (it backs `messagesSince` /
+   * `turnComplete` and fuses into the belief). An agent that omits it simply has
+   * no transcript channel — reads return empty and observation leans on hooks +
+   * pane. (claude implements it; a future agent may not.)
+   */
+  readonly transcript?: {
+    /**
+     * Absolute path of the on-disk transcript for a session id, or `null` if
+     * not found. Located by id across the agent's session store — never by
+     * recomputing the fragile cwd→path rule.
+     */
+    locate(o: { agentSessionId: string; home?: string }): string | null;
+    /**
+     * Parse one transcript line into a neutral {@link Message}, or `null` for a
+     * metadata record, a blank line, or a partial/half-flushed line.
+     */
+    parseLine(line: string): Message | null;
+    /**
+     * The raw ancestry link (`id` + optional `parentId`) of **any** transcript
+     * record that carries an identity — including non-message records (e.g.
+     * `attachment`) that an agent may thread *between* a prompt and its reply.
+     * Returns `null` for blank/partial lines and records with no id.
+     *
+     * Lets the consumer reconstruct the *full* causal graph and so detect
+     * message descendants even when the chain passes through records
+     * {@link parseLine} drops. Optional: when absent, descendant detection falls
+     * back to links between surfaced messages only.
+     */
+    parseEdge?(line: string): { id: string; parentId?: string } | null;
+    /**
+     * True when `message` starts a new user turn (a typed prompt), false for
+     * tool-result feedback that is also recorded turn-side.
+     */
+    isTurnStart(message: Message): boolean;
+  };
+
+  /**
+   * Hook-based turn observation — the SOLE owner of this agent's hook
+   * vocabulary (which events to wire, the settings shape, the marker format).
+   * The agent emits turn markers to a claudemux-owned local rendezvous; the
+   * Observer reads them as deterministic phase edges (no pane-scraping). The
+   * spawn layer injects {@link spec}'s flag at launch; the Observer parses each
+   * rendezvous line with {@link parseMarker}. Both live here so the
+   * hook-event strings stay out of the agent-agnostic layers (grep-enforced).
+   *
+   * Optional by **graceful degrade**, not by incompleteness: injection (the
+   * spawn layer) and the Observer have landed and use this whenever it's present
+   * (the reliable observe channel). An agent that omits it — or `create({ hooks:
+   * false })` — degrades honestly to the best-effort pane fallback
+   * (`hookChannelHealthy: false`), never silently.
+   */
+  readonly hooks?: {
+    /**
+     * The launch flag that wires this agent's turn hooks to append markers to
+     * `rendezvousPath`. Inspectable (transparency) and the one place that knows
+     * the settings shape. e.g. `{ flag: "--settings", value: "<json>" }`.
+     */
+    spec(o: { rendezvousPath: string }): { flag: string; value: string };
+    /** Parse one rendezvous marker line into a neutral {@link HookEdge}, or null. */
+    parseMarker(line: string): HookEdge | null;
+  };
+}
+
+/**
+ * A neutral, deterministic turn-lifecycle edge derived from an agent hook —
+ * the reliable observe signal (vs pane-scraping). `event` is backend-neutral;
+ * the Observer composes a sequence of these into phase / toolInFlight / done.
+ *
+ * Beyond the bare edge, a hook payload also carries data the Observer fuses with
+ * the transcript and pane. Those fields are surfaced here as **neutral** concepts
+ * (`transcriptPath`, `source`, `finalMessage`); the agent's `parseMarker` owns
+ * translating its vendor payload (e.g. claude's `transcript_path` /
+ * `last_assistant_message`) into them, so vendor field names never leak past the
+ * agent seam (grep-enforced). All are optional — present only on the edges that
+ * carry them, and only for agents whose hooks expose them.
+ */
+export interface HookEdge {
+  readonly event:
+    | "session-start"
+    | "prompt-submit"
+    | "tool-start"
+    | "tool-end"
+    | "stop"
+    | "notification"
+    | "pre-compact"
+    | "other";
+  /** Epoch milliseconds the hook fired. */
+  readonly at: number;
+  /** The agent session id the hook reported, when present. */
+  readonly sessionId?: string;
+  /** Tool name for `tool-start`/`tool-end` edges, when present. */
+  readonly tool?: string;
+  /**
+   * The **authoritative** absolute path of the session's durable transcript, as
+   * the hook reported it. The Observer prefers this over recomputing/globbing
+   * the on-disk location (the path rule is fragile). Present on most edges.
+   */
+  readonly transcriptPath?: string;
+  /**
+   * Why the session started — only on a `session-start` edge. Lets the Observer
+   * distinguish a fresh boot from a resume (expect a history re-print) or a
+   * post-compaction continuation, without inspecting the screen.
+   */
+  readonly source?: "start" | "resume" | "clear" | "compact";
+  /**
+   * A preview of the turn's terminal assistant text, as the agent reported it on
+   * the `stop` edge — available *before* the transcript flushes that record.
+   * The Observer uses it to close the hook→transcript flush skew: on `stop` it
+   * polls the transcript until the durable reply is present, rather than reading
+   * stale content the instant the edge fires.
+   */
+  readonly finalMessage?: string;
 }

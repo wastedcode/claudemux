@@ -4,7 +4,7 @@
  * still has the context they need.
  *
  * No bare `Error` is ever thrown from the library. The classes here are
- * exhaustive for v0.0.1.
+ * exhaustive for the current public surface.
  */
 
 /** Base class — consumers can `catch (e: ClaudemuxError)` for the union. */
@@ -98,8 +98,10 @@ export class DialogStuck extends ClaudemuxError {
 }
 
 /**
- * Thrown by `wait()` or boot when the REPL did not reach an actionable
- * state (idle / permission-prompt / dialog) within the configured timeout.
+ * Thrown by **boot** ({@link create}/{@link resume}/{@link adopt}) when the REPL
+ * did not reach a stable ready state within `bootTimeoutMs`. NOT thrown by
+ * `wait()` — turn patience is the consumer's, so a turn that outlasts your budget
+ * is a returned `budget-exceeded` {@link TurnOutcome}, never an exception.
  */
 export class ReplTimeout extends ClaudemuxError {
   /** The timeout budget that elapsed, in milliseconds. */
@@ -160,29 +162,55 @@ export class WorkspaceUntrusted extends ClaudemuxError {
 }
 
 /**
- * Thrown when the underlying pane's process has died but the pane container
- * is still present in the backend's data model (Case A pane-death).
+ * Thrown by {@link SessionHandle.respond} when the agent declares no
+ * permission-prompt handling — there is no menu mapping to translate a
+ * {@link PromptChoice} into a keystroke, so the substrate refuses to guess a
+ * digit (a wrong guess could pick the broadest "allow all" option). An agent
+ * grows prompt handling by adding the mapping to its `AgentDef`; until then a
+ * consumer that hits an `awaiting{permission-prompt}` must answer the agent
+ * out-of-band (or run it in a non-interactive permission mode).
  */
-export class PaneDead extends ClaudemuxError {
-  /**
-   * Canonical name of the signal that killed the pane process (e.g.
-   * `"SIGKILL"`) — backend-neutral and platform-stable (signal *numbers*
-   * differ across OSes; names do not). Undefined when the pane died from a
-   * normal exit or the cause could not be identified: the error still fires,
-   * the signal is best-effort diagnostic metadata.
-   */
-  readonly signal: string | undefined;
+export class PromptResponseUnsupported extends ClaudemuxError {
+  /** The agent that has no permission-prompt mapping (e.g. a future codex def). */
+  readonly agentName: string;
 
-  constructor(sessionName: string, signal?: string) {
-    super(signal ? `pane process is dead (${signal})` : "pane process is dead", sessionName);
-    this.signal = signal;
+  constructor(sessionName: string, agentName: string) {
+    super(
+      `agent "${agentName}" declares no permission-prompt handling; respond() has no menu mapping to answer the prompt`,
+      sessionName,
+    );
+    this.agentName = agentName;
   }
 }
 
 /**
- * Thrown when the backend cannot find the named session at all (Case B —
- * the pane has been reaped). Includes "the session was already gone before
- * we touched it" — kill() never throws this.
+ * Thrown by {@link SessionHandle.messagesSince} / {@link SessionHandle.turnComplete}
+ * when the session's transcript **cannot be located at all** — there is no
+ * recoverable `agentSessionId` to locate it by AND no hook edge has reported its
+ * path (an {@link adopt} whose recovery cache missed, a non-claudemux session, or
+ * a fork before its first hook edge). Reads are *blind*, not "nothing new."
+ *
+ * This is a **loud** failure on purpose: an empty read silently conflated with
+ * "no reply yet" sits exactly in the crash-recovery re-send path, where the wrong
+ * answer double-runs work. Throwing forces the consumer to handle "I can't see
+ * this conversation" distinctly. A genuinely empty (but *locatable*) transcript,
+ * or an unresolvable cursor (a sentinel/garbage value), still returns empty —
+ * only true unlocatability throws.
+ */
+export class TranscriptUnlocatable extends ClaudemuxError {
+  constructor(sessionName: string) {
+    super(
+      "transcript cannot be located (no recoverable agentSessionId and no hook-reported path); reads are blind, not empty — persist the agentSessionId, or check `agentSessionId !== undefined` before reading",
+      sessionName,
+    );
+  }
+}
+
+/**
+ * Thrown when the backend cannot find the named session — it has been reaped
+ * (a crash, a `kill`, or the box lost its backend server). The canonical "this
+ * session is gone" for **every** per-session op (read or write); `kill()` never
+ * throws it (killing a gone session is success).
  */
 export class SessionGone extends ClaudemuxError {
   constructor(sessionName: string) {
@@ -207,11 +235,10 @@ export class SessionGone extends ClaudemuxError {
  * we do not flip it to recover a diagnostic string.
  *
  * This is a distinct class on purpose (errors.ts reuses before adding):
- * {@link PaneDead} is a dead process whose pane is still *present* (only under
- * `remain-on-exit on`); {@link SessionGone} reads as *external* reaping of a
- * session that should exist. Neither carries the meaning the create path needs
- * — *"the agent I just spawned rejected its own launch"* (self-inflicted exit
- * vs external interference) — which is exactly what the consumer must act on.
+ * {@link SessionGone} reads as *external* reaping of a session that should
+ * exist, which does not carry the meaning the create path needs — *"the agent I
+ * just spawned rejected its own launch"* (self-inflicted exit vs external
+ * interference) — which is exactly what the consumer must act on.
  *
  * When the spawn used a caller-chosen id, it is carried on
  * {@link agentSessionId} so the collision case stays actionable as structured

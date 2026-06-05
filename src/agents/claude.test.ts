@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentSessionIdConflict } from "../errors.js";
 import { claude } from "./claude.js";
@@ -213,6 +216,31 @@ describe("claude.buildArgv — explicit id conflicting with an extraArgs identit
   });
 });
 
+describe("claude.buildArgv — neutral resume (resumeFrom → --resume, owned here)", () => {
+  it("maps resumeFrom to `--resume <id>` as TWO adjacent argv elements, surfaces the id", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", resumeFrom: UUID });
+    expect(r.argv).toEqual(["--resume", UUID]); // two elements, never joined
+    expect(r.argv.some((a) => a.startsWith("--resume="))).toBe(false);
+    expect(r.agentSessionId).toBe(UUID);
+  });
+
+  it("threads extraArgs after the resume flag", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", resumeFrom: UUID, extraArgs: ["--verbose"] });
+    expect(r.argv).toEqual(["--resume", UUID, "--verbose"]);
+  });
+
+  it("resumeFrom + a co-present extraArgs identity flag is choosing the id twice → conflict", () => {
+    expect(() =>
+      claude.buildArgv({
+        cwd: "/tmp",
+        resumeFrom: UUID,
+        sessionName: "claudemux/job",
+        extraArgs: ["--resume", UUID2],
+      }),
+    ).toThrow(AgentSessionIdConflict);
+  });
+});
+
 describe("claude.boot.dialogs (claude 2.1.153)", () => {
   it("theme-picker matches + responds Enter", () => {
     const d = claude.boot.dialogs.find((x) => x.id === "theme-picker");
@@ -271,23 +299,109 @@ describe("claude.boot.isReady — empty-input-box on real 2.1.153 panes", () => 
   });
 });
 
-describe("permission-prompt is reserved, NOT emitted in v0.0.1 (ADR 0010 — detection+handling are v0.1)", () => {
-  it("permissionPrompt returns false for everything — including the real 2.1.153 prompt", () => {
-    // Per ADR 0010, detection and handling defer to v0.1 as one unit (a
-    // `respond()` primitive lands with detection). v0.0.1 ships the matcher
-    // empty: a prompt classifies as `unknown` (NOT idle — property #2 floor
-    // holds), and an interactive default-mode session that hits one runs out
-    // its wait() budget → ReplTimeout. Documented fix: a non-interactive
-    // permission mode (README §5). The enumerated shapes are kept in
-    // test/fixtures/ as the v0.1 starting point.
-    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(false);
-    expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(false);
+/**
+ * ANSI fixtures captured VERBATIM from authenticated claude 2.1.162 (spike,
+ * 2026-06-04) with `tmux capture-pane -e`. Since 2.1.16x an *idle* input box is
+ * NOT blank — it renders a dim "ghost" placeholder hint. In plain text that is
+ * indistinguishable from a real draft, so `isReady` reads the styled capture
+ * and separates them by intensity: the placeholder is SGR-faint (code 2), the
+ * block cursor is reverse-video (code 7), a real draft is normal intensity.
+ *
+ * `\x1b` is ESC. These decode to:
+ *   IDLE_GHOST   : `❯ ` + reverse cursor on `T` + dim `ry "…"`  → idle
+ *   IDLE_EMPTY   : `❯ ` + reverse-video space cursor            → idle
+ *   DRAFT_NORMAL : `❯ hello world` at normal intensity + cursor → NOT idle
+ */
+const IDLE_GHOST_2_1_162 = '\x1b[39m❯ \x1b[7mT\x1b[0;2mry "how does <filepath> work?"\x1b[0m';
+const IDLE_EMPTY_2_1_162 = "\x1b[39m❯ \x1b[7m \x1b[0m";
+const DRAFT_NORMAL_2_1_162 = "\x1b[39m❯ hello world\x1b[7m \x1b[0m";
+
+describe("claude.boot.isReady — dim ghost-placeholder vs real draft (claude 2.1.162, ANSI)", () => {
+  it("accepts the idle box even when it shows the dim ghost-placeholder hint", () => {
+    // The 2.1.16x boot/wait-hang bug: a plain-text check reads `Try "…"` as a
+    // draft and never sees idle. The styled check sees it is all dim → idle.
+    expect(claude.boot.isReady(IDLE_GHOST_2_1_162)).toBe(true);
+    expect(claude.boot.isReady(IDLE_EMPTY_2_1_162)).toBe(true);
   });
 
-  it("a permission prompt is therefore NOT idle (never mistaken for a completed turn)", () => {
-    // The floor that DOES hold in v0.0.1: a prompt is not the empty input box.
+  it("still rejects a REAL draft (normal intensity) — no silent turn-loss", () => {
+    expect(claude.boot.isReady(DRAFT_NORMAL_2_1_162)).toBe(false);
+  });
+
+  it("rules.idle agrees, so state()/wait() stop mis-reading the ghost hint", () => {
+    expect(claude.rules.idle(IDLE_GHOST_2_1_162)).toBe(true);
+    expect(claude.rules.idle(DRAFT_NORMAL_2_1_162)).toBe(false);
+  });
+
+  it("dialog/working predicates still match through SGR styling (stripped first)", () => {
+    // A styled trust-dialog header must still classify as a dialog, and a
+    // styled working footer as working — both strip SGR before substring match.
+    expect(claude.rules.dialog("\x1b[1m trust this folder\x1b[0m")).toBe(true);
+    expect(claude.rules.working("\x1b[2m esc to interrupt\x1b[0m")).toBe(true);
+  });
+});
+
+describe("permission-prompt detection + handling (one unit per ADR 0010)", () => {
+  it("permissionPrompt requires BOTH the header AND the selectable menu (verified on 2.1.162)", () => {
+    // The real prompt: header `Do you want to <verb> <target>?` + the `❯ 1.`
+    // approval menu. The full 40-row capture means a completed/working turn
+    // could carry the header phrase in scrollback above the box, so the menu
+    // line is the load-bearing disambiguator.
+    expect(claude.rules.permissionPrompt(PERMISSION_PROMPT_2_1_153)).toBe(true);
+
+    // Header WITHOUT the menu — a reply tail ending in the phrase, or a
+    // streaming working frame — must NOT fire (the F-class false positive).
+    expect(claude.rules.permissionPrompt("Do you want to make this edit to foo.ts?")).toBe(false);
+    const replyTailThenIdleBox = [
+      "● Done. Do you want to proceed with the next step?",
+      "────────────────────────────",
+      "❯ ", // the empty input box — a COMPLETED turn, not a prompt
+    ].join("\n");
+    expect(claude.rules.permissionPrompt(replyTailThenIdleBox)).toBe(false);
+
+    // Menu WITHOUT the header (a boot dialog shape) — also not a permission
+    // prompt here (and dialogs are classified first anyway).
+    expect(claude.rules.permissionPrompt("❯ 1. Yes, I trust this folder\n  2. No, exit")).toBe(
+      false,
+    );
+    // Prose mentioning the phrase mid-sentence does NOT match (no leading anchor).
+    expect(claude.rules.permissionPrompt("So, do you want to proceed")).toBe(false);
+  });
+
+  it("a permission prompt is NOT idle (never mistaken for a completed turn)", () => {
     expect(claude.boot.isReady(PERMISSION_PROMPT_2_1_153)).toBe(false);
     expect(claude.rules.idle(PERMISSION_PROMPT_2_1_153)).toBe(false);
+  });
+
+  it("respondKey maps each neutral choice to claude's stable menu order (1/2/3)", () => {
+    // 1=Yes (approve once) · 2=Yes, allow all this session · 3=No. Verified
+    // against 2.1.162: a bare digit selects-and-confirms (no Enter).
+    const pp = claude.permissionPrompt;
+    if (!pp) throw new Error("claude.permissionPrompt must be defined");
+    expect(pp.respondKey("approve")).toBe("1");
+    expect(pp.respondKey("approve-for-session")).toBe("2");
+    expect(pp.respondKey("deny")).toBe("3");
+  });
+});
+
+describe("claude.rules.queued — send-while-busy affordance (S4 / F12)", () => {
+  // Captured verbatim from authenticated claude 2.1.162: a message sent mid-turn
+  // is queued and the composer shows this affordance beneath it.
+  const QUEUED_PANE_2_1_162 = [
+    "  ❯ Reply with exactly the single word: TWO",
+    "────────────────────────────────────────────",
+    "❯ Press up to edit queued messages",
+    "────────────────────────────────────────────",
+    "  esc to interrupt",
+  ].join("\n");
+
+  it("fires on the queued affordance, not on ordinary working/idle frames", () => {
+    expect(claude.rules.queued?.(QUEUED_PANE_2_1_162)).toBe(true);
+    expect(claude.rules.queued?.(WORKING_PANE_2_1_153)).toBe(false);
+    expect(claude.rules.queued?.(READY_PANE_2_1_153)).toBe(false);
+    // A turn IS still working while something is queued — queued is orthogonal,
+    // not a replacement for the working state.
+    expect(claude.rules.working(QUEUED_PANE_2_1_162)).toBe(true);
   });
 });
 
@@ -309,5 +423,174 @@ describe("claude.rules — classifier on real 2.1.153 frames", () => {
   it("idle is the empty-box check (same as boot.isReady)", () => {
     expect(claude.rules.idle(READY_PANE_2_1_153)).toBe(true);
     expect(claude.rules.idle(WORKING_PANE_2_1_153)).toBe(false);
+  });
+});
+
+/**
+ * Transcript reader fixtures — record shapes captured VERBATIM from
+ * authenticated claude 2.1.161 (spike, 2026-06-03). They pin the real schema so
+ * a future claude minor that drifts the record shape fails `npm test` instead
+ * of silently returning wrong messages to a consumer.
+ */
+const USER_TYPED =
+  '{"parentUuid":"p1","type":"user","message":{"role":"user","content":"Use the Bash tool to run exactly: echo hello-from-spike"},"uuid":"u1","timestamp":"2026-06-03T21:42:39.052Z","promptSource":"typed"}';
+const ASSISTANT_TEXT =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I\'ll run that command."}],"stop_reason":"tool_use"},"uuid":"a1","timestamp":"2026-06-03T21:42:41.000Z"}';
+const ASSISTANT_TOOLUSE =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hello-from-spike"}}]},"uuid":"a2"}';
+const ASSISTANT_MCP_TOOLUSE =
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"mcp__claude_ai_Notion__notion-search","input":{"query":"roadmap"}}]},"uuid":"a3"}';
+const TOOL_RESULT_USER =
+  '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"hello-from-spike\\n","is_error":false}]},"uuid":"u2"}';
+const METADATA_RECORD =
+  '{"type":"file-history-snapshot","uuid":"m1","timestamp":"2026-06-03T00:00:00Z"}';
+const PARTIAL_LINE = '{"type":"assist';
+
+describe("claude transcript reader", () => {
+  const tx = claude.transcript;
+  if (!tx) throw new Error("claude.transcript must be defined");
+
+  it("parses a typed user prompt → role user, one text part, id+at, isTurnStart", () => {
+    const m = tx.parseLine(USER_TYPED);
+    expect(m).not.toBeNull();
+    expect(m?.role).toBe("user");
+    expect(m?.id).toBe("u1");
+    expect(m?.at).toBe("2026-06-03T21:42:39.052Z");
+    expect(m?.parts).toEqual([
+      { kind: "text", text: "Use the Bash tool to run exactly: echo hello-from-spike" },
+    ]);
+    expect(m && tx.isTurnStart(m)).toBe(true);
+  });
+
+  it("parses an assistant text block → role assistant, not a turn start", () => {
+    const m = tx.parseLine(ASSISTANT_TEXT);
+    expect(m?.role).toBe("assistant");
+    expect(m?.parts).toEqual([{ kind: "text", text: "I'll run that command." }]);
+    expect(m && tx.isTurnStart(m)).toBe(false);
+  });
+
+  it("parses a tool_use block → kind tool, name + input summary", () => {
+    const m = tx.parseLine(ASSISTANT_TOOLUSE);
+    expect(m?.parts).toEqual([{ kind: "tool", tool: "Bash", summary: "echo hello-from-spike" }]);
+  });
+
+  it("strips the mcp__server__ prefix from MCP tool names", () => {
+    const m = tx.parseLine(ASSISTANT_MCP_TOOLUSE);
+    expect(m?.parts).toEqual([{ kind: "tool", tool: "notion-search", summary: "roadmap" }]);
+  });
+
+  it("parses a tool_result-feedback user record → tool-result part, NOT a turn start", () => {
+    const m = tx.parseLine(TOOL_RESULT_USER);
+    expect(m?.role).toBe("user");
+    expect(m?.parts[0]?.kind).toBe("tool-result");
+    expect((m?.parts[0] as { ok: boolean }).ok).toBe(true);
+    expect(m && tx.isTurnStart(m)).toBe(false);
+  });
+
+  it("returns null for metadata, partial, and blank lines (never throws)", () => {
+    expect(tx.parseLine(METADATA_RECORD)).toBeNull();
+    expect(tx.parseLine(PARTIAL_LINE)).toBeNull();
+    expect(tx.parseLine("")).toBeNull();
+    expect(tx.parseLine("   ")).toBeNull();
+  });
+
+  it("locate finds <id>.jsonl by id-glob across project dirs, null when absent", () => {
+    const home = mkdtempSync(join(tmpdir(), "cmux-tx-"));
+    try {
+      const projDir = join(home, ".claude", "projects", "-some-cwd-slug");
+      mkdirSync(projDir, { recursive: true });
+      const id = "f3aaa87f-d2e3-4fea-89bf-80cda78d5f22";
+      const file = join(projDir, `${id}.jsonl`);
+      writeFileSync(file, USER_TYPED);
+      expect(tx.locate({ agentSessionId: id, home })).toBe(file);
+      expect(tx.locate({ agentSessionId: "no-such-id", home })).toBeNull();
+      expect(tx.locate({ agentSessionId: id, home: "/nonexistent/home" })).toBeNull();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Hook marker fixtures — captured VERBATIM from claude 2.1.161 rendezvous lines
+ * (spike 2, 2026-06-03): "<epoch.ns> <hook-stdin-payload-json>".
+ */
+const MARK_SESSION_START =
+  '1780520869.545460990 {"session_id":"ea1ed621-8761-4364-99bb-9a56d8e1df4d","hook_event_name":"SessionStart","cwd":"/tmp/cmux-spike"}';
+const MARK_PROMPT_SUBMIT =
+  '1780520910.702135650 {"session_id":"ea1ed621-8761-4364-99bb-9a56d8e1df4d","hook_event_name":"UserPromptSubmit","permission_mode":"bypassPermissions"}';
+const MARK_TOOL_START =
+  '1780520963.660420728 {"session_id":"ea1ed621","hook_event_name":"PreToolUse","tool_name":"Bash"}';
+const MARK_STOP = '1780520912.288493072 {"session_id":"ea1ed621","hook_event_name":"Stop"}';
+
+/**
+ * Enriched-payload fixtures — captured VERBATIM from claude 2.1.162 (spike,
+ * 2026-06-04). The payload carries the fields the Observer fuses: `source` +
+ * `transcript_path` on SessionStart, `last_assistant_message` on Stop. The
+ * agent seam translates these vendor names into the neutral edge.
+ */
+const MARK_START_FULL =
+  '1780534156.837258039 {"session_id":"399285a1-0c9a-41fa-bbbb-000000000000","transcript_path":"/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl","cwd":"/tmp/cmux","hook_event_name":"SessionStart","source":"startup","model":"claude-opus-4-8"}';
+const MARK_START_RESUME =
+  '1780534200.000000000 {"session_id":"399285a1","transcript_path":"/p/x.jsonl","hook_event_name":"SessionStart","source":"resume"}';
+const MARK_STOP_FULL =
+  '1780534162.949506605 {"session_id":"399285a1","transcript_path":"/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"PONG"}';
+
+describe("claude hook spec + marker parser", () => {
+  const h = claude.hooks;
+  if (!h) throw new Error("claude.hooks must be defined");
+
+  it("spec injects --settings wiring the turn events to the rendezvous path", () => {
+    const { flag, value } = h.spec({ rendezvousPath: "/tmp/cmux/turns/abc.ndjson" });
+    expect(flag).toBe("--settings");
+    const parsed = JSON.parse(value) as { hooks: Record<string, unknown> };
+    // The lifecycle events we depend on are all wired.
+    for (const ev of ["SessionStart", "UserPromptSubmit", "Stop", "PreToolUse", "PostToolUse"]) {
+      expect(parsed.hooks[ev]).toBeDefined();
+    }
+    // The command appends to exactly our rendezvous path.
+    expect(value).toContain("/tmp/cmux/turns/abc.ndjson");
+    expect(value).toContain("date +%s.%N");
+  });
+
+  it("parseMarker maps each event to a neutral edge with ms timestamp", () => {
+    expect(h.parseMarker(MARK_SESSION_START)).toMatchObject({
+      event: "session-start",
+      at: 1780520869545,
+    });
+    expect(h.parseMarker(MARK_PROMPT_SUBMIT)?.event).toBe("prompt-submit");
+    const toolEdge = h.parseMarker(MARK_TOOL_START);
+    expect(toolEdge?.event).toBe("tool-start");
+    expect(toolEdge?.tool).toBe("Bash");
+    expect(h.parseMarker(MARK_STOP)).toMatchObject({ event: "stop", sessionId: "ea1ed621" });
+  });
+
+  it("translates the fusion payload into neutral edge fields (transcriptPath/source/finalMessage)", () => {
+    const start = h.parseMarker(MARK_START_FULL);
+    expect(start).toMatchObject({
+      event: "session-start",
+      source: "start", // claude's "startup" → neutral "start"
+      transcriptPath: "/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl",
+    });
+    expect(h.parseMarker(MARK_START_RESUME)?.source).toBe("resume");
+    const stop = h.parseMarker(MARK_STOP_FULL);
+    expect(stop).toMatchObject({
+      event: "stop",
+      finalMessage: "PONG", // closes the hook→transcript flush skew
+      transcriptPath: "/home/claude/.claude/projects/-tmp-cmux/399285a1.jsonl",
+    });
+    // Bare payloads (no fusion fields) simply omit them — never null/empty noise.
+    const bare = h.parseMarker(MARK_STOP);
+    expect(bare?.event).toBe("stop");
+    expect(bare?.transcriptPath).toBeUndefined();
+    expect(bare?.finalMessage).toBeUndefined();
+  });
+
+  it("an unknown event maps to 'other'; malformed lines return null (never throw)", () => {
+    expect(h.parseMarker('1780520000.0 {"hook_event_name":"SomethingNew"}')?.event).toBe("other");
+    expect(h.parseMarker("no-space-here")).toBeNull();
+    expect(h.parseMarker("1780520000.0 {not json}")).toBeNull();
+    expect(h.parseMarker("")).toBeNull();
+    expect(h.parseMarker("notanumber {}")).toBeNull();
   });
 });

@@ -1,13 +1,11 @@
-import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, SessionRef } from "../backends/types.js";
+import type { Backend } from "../backends/types.js";
 import { SessionGone } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { AGENT_SESSION_ID_META_KEY, DEFAULT_NAMESPACE } from "./constants.js";
-import { sharedDefaultBackend } from "./default-backend.js";
+import { AGENT_SESSION_ID_META_KEY } from "./constants.js";
 import { attachHandle } from "./handle.js";
 import { formatSessionLabel } from "./ref.js";
-import { validateNamePart } from "./validate.js";
+import { resolveSessionContext } from "./resolve.js";
 
 /**
  * Options for {@link adopt}. Mirrors {@link CreateOptions} minus the spawn-only
@@ -35,8 +33,8 @@ export interface AdoptOptions {
  * the mirror of {@link create}. Pure attach: no spawn, no boot, no dialog dismissal.
  *
  * After a successful adopt the consumer MUST call `state()` before driving the
- * pane (covers wedged / PaneDead / mid-dialog). See README §adopt for the A/B/C
- * recovery taxonomy and the single-writer invariant.
+ * pane (covers wedged / mid-dialog). See README §adopt for the A/B/C recovery
+ * taxonomy and the single-writer invariant.
  *
  * @throws `InvalidSessionName` if `name`/`namespace` contain reserved characters
  *   (thrown before the exists-check).
@@ -51,18 +49,14 @@ export interface AdoptOptions {
  *   await session.state(); // ALWAYS call state() before driving the pane
  * } catch (err) {
  *   if (err instanceof SessionGone) {
- *     // process exited — re-create with `--resume <agentSessionId>`
+ *     // the pane is gone — continue the conversation in a fresh one:
+ *     // await resume({ name: "job-2", cwd, agentSessionId });
  *   }
  * }
  * ```
  */
 export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
-  validateNamePart("namespace", namespace);
-  validateNamePart("name", opts.name);
-  const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? sharedDefaultBackend();
-  const ref: SessionRef = { namespace, name: opts.name };
+  const { ref, agent, backend } = resolveSessionContext(opts);
 
   // Mirror of create()'s exists-check, inverted. adopt REQUIRES the session to
   // be present; absence (including whole-server-down, which exists() collapses
@@ -83,8 +77,8 @@ export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
   return attachHandle({
     backend,
     agent,
-    namespace,
-    name: opts.name,
+    namespace: ref.namespace,
+    name: ref.name,
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
   });
 }

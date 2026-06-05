@@ -8,9 +8,13 @@ export interface SpawnCliOpts extends CommonOpts {
   trustWorkspace?: boolean;
 }
 
-/** `claudemux spawn <name> --cwd <path>` — start a session and wait for ready. */
+/**
+ * `claudemux spawn <name> --cwd <path>` — start a session and wait for ready.
+ * Emits `{ "agentSessionId": "<id>" }` so a CLI user can persist the id and
+ * later `claudemux resume <name2> <id>` (mirrors `send` emitting its cursor).
+ */
 export async function spawnCli(name: string, opts: SpawnCliOpts): Promise<void> {
-  await create({
+  const session = await create({
     name,
     cwd: opts.cwd,
     backend: backend(opts),
@@ -20,4 +24,5 @@ export async function spawnCli(name: string, opts: SpawnCliOpts): Promise<void> 
     ...(opts.extraArgs === undefined ? {} : { extraArgs: opts.extraArgs }),
     ...(opts.trustWorkspace === undefined ? {} : { trustWorkspace: opts.trustWorkspace }),
   });
+  process.stdout.write(`${JSON.stringify({ agentSessionId: session.agentSessionId ?? null })}\n`);
 }

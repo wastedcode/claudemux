@@ -14,27 +14,25 @@
  *
  * The shape: a daemon persisted some sessions before it restarted. On boot it
  * re-adopts each one, and for every way an adopt can fail to hand back a
- * usable agent, it falls back to re-creating with `--resume`.
+ * usable agent, it falls back to `resume()` — continue the conversation in a
+ * fresh pane.
  */
 
 import {
   type AgentDef,
   LoginRequired,
-  PaneDead,
-  ReplTimeout,
   SessionGone,
   type SessionHandle,
   adopt,
   claude,
-  create,
+  resume,
 } from "claudemux";
 
 /**
  * What the daemon persisted per session. You MUST persist BOTH:
  *
- *  - `agentSessionId` feeds `--resume` and fails LOUDLY if you forget it —
- *    re-`create()` simply starts a fresh conversation (or errors), and you
- *    notice at once.
+ *  - `agentSessionId` feeds `resume()` and fails LOUDLY if you forget it — you
+ *    have nothing to continue and start fresh (or error), and notice at once.
  *  - `agentDefId` selects which `AgentDef` to re-pass to `adopt()`. Forgetting
  *    or mismatching it fails SILENTLY: `state()`/`wait()` classify the live
  *    pane against the WRONG agent's rules and quietly lie. Harmless while
@@ -55,18 +53,22 @@ const store: Record<string, Persisted> = {
   "job-b": { agentSessionId: "sess_bbb", agentDefId: "claude" },
 };
 
-/** Re-create a session from its persisted resume id (States A / B / C all land here). */
-async function recreate(name: string, p: Persisted): Promise<SessionHandle> {
-  return create({
+/** Continue the conversation in a fresh pane (States A / B / C all land here). */
+async function reattachFresh(name: string, p: Persisted): Promise<SessionHandle> {
+  // The old pane is gone (A) or has been killed (B/C), so the name is free.
+  return resume({
     name,
     cwd: process.cwd(),
     agent: AGENTS[p.agentDefId] ?? claude,
-    extraArgs: ["--resume", p.agentSessionId],
+    agentSessionId: p.agentSessionId,
   });
 }
 
-/** Re-adopt one persisted session, walking the A/B/C recovery decision tree. */
-async function recover(name: string, p: Persisted): Promise<SessionHandle> {
+// This shows the recovery dance by hand (adopt → state() → resume) AND adds a
+// wedged-pane (state B) check the `recover()` compound deliberately leaves to you.
+// If you just need attach-or-resume, call `recover()` instead of all of this.
+/** Re-adopt one persisted session, walking the A (gone) / B (wedged) decision tree. */
+async function reattachOne(name: string, p: Persisted): Promise<SessionHandle> {
   const agent = AGENTS[p.agentDefId] ?? claude;
 
   let session: SessionHandle;
@@ -75,41 +77,38 @@ async function recover(name: string, p: Persisted): Promise<SessionHandle> {
   } catch (err) {
     if (err instanceof SessionGone) {
       // State A — the process exited (a crashed `claude` tears down the whole
-      // session, so absence is clean). Re-create with --resume.
-      return recreate(name, p);
+      // session, so absence is clean). Resume the conversation in a fresh pane.
+      return reattachFresh(name, p);
     }
     throw err;
   }
 
-  // The pane is live, but "live" is not "usable". ALWAYS call state() before
-  // driving it — adopt() is a pure attach and dismisses nothing.
+  // The pane is live, but "live" is not "usable". ALWAYS read state() before
+  // driving it — adopt() is a pure attach and dismisses nothing. state() is the
+  // fused snapshot (NOT wait(), which waits on an in-flight TURN — a healthy
+  // idle session has none, so wait() would budget-exceed and falsely read wedged).
+  let st: Awaited<ReturnType<SessionHandle["state"]>>;
   try {
-    await session.state();
+    st = await session.state();
   } catch (err) {
-    if (err instanceof PaneDead) {
-      // State C — the pane container survives but its process is dead. Kill the
-      // husk, then re-create with --resume.
+    if (err instanceof SessionGone) {
+      // Also State A — the pane vanished between adopt() and this read (a
+      // mid-check crash). kill() is idempotent; resume in a fresh pane.
       await session.kill();
-      return recreate(name, p);
+      return reattachFresh(name, p);
     }
     throw err;
   }
 
-  try {
-    // A bounded wait() surfaces State B: the pane is attached but wedged and
-    // never settles to an actionable state. Treat the timeout as "wedged".
-    await session.wait({ timeoutMs: 30_000 });
-  } catch (err) {
-    if (err instanceof ReplTimeout) {
-      // State B — wedged. Kill it THEN re-create with --resume.
-      await session.kill();
-      return recreate(name, p);
-    }
-    throw err;
+  if (st === "unknown") {
+    // State B — wedged / unrecognized: the pane is attached but the substrate
+    // can't make sense of it. Kill it THEN resume in a fresh pane.
+    await session.kill();
+    return reattachFresh(name, p);
   }
 
-  // Reached an actionable state on the live pane — the win: reconnected, no
-  // conversation lost, no re-create needed.
+  // idle / working / dialog → reconnected, no conversation lost (a `working`
+  // pane is a turn still legitimately in flight — let it run).
   return session;
 }
 
@@ -121,7 +120,7 @@ async function main(): Promise<void> {
     // re-creating, or you re-spawn N sessions against a just-restarted host. This
     // loop recovers one at a time for clarity; a batch recoverer must back off.
     for (const [name, persisted] of Object.entries(store)) {
-      const session = await recover(name, persisted);
+      const session = await reattachOne(name, persisted);
       process.stdout.write(`recovered ${name} → ${await session.state()}\n`);
     }
   } catch (err) {

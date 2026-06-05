@@ -5,18 +5,38 @@
 
 ## 1. TL;DR
 
-You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or several), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
+You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or a whole fleet), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
 
 ```ts
 import { create } from "claudemux";
 
 const session = await create({ name: "job", cwd: process.cwd() });
 await session.send("Add a CHANGELOG entry for the next release");
-await session.wait();
+await session.wait(); // blocks until the turn ends; pass { maxMs } / { idleMs } to bound it
 const text = await session.capture();
 ```
 
-`create()` boots the agent, dismisses the first-run dialogs, and returns when the REPL is genuinely ready — not after a `sleep`. `wait()` blocks until the agent is in an actionable state (idle, awaiting a permission decision, or showing a dialog). The five-line example above is the whole substrate.
+`create()` boots the agent, dismisses the first-run dialogs, and returns when the REPL is genuinely ready — not after a `sleep`. `wait()` blocks until the turn reaches a terminal **`TurnOutcome`** — `completed` (and the reply is readable), `awaiting` a decision, `aborted`, or out of your patience budget — fused from the agent's hooks + transcript, not screen-scraping. For the whole round-trip in one call there's `ask()` (send → wait → read); to continue a conversation after a crash there's `resume()`.
+
+That's one session. The name is the other half — drive a **fleet**, each session addressed by `name`, from one process:
+
+```ts
+import { create, ask } from "claudemux";
+
+// Boot three at once — each is its own real claude session.
+const fleet = await Promise.all(
+  ["api", "ui", "docs"].map((name) => create({ name, cwd: `./services/${name}` })),
+);
+
+// Fan a task across them; collect each as it actually finishes.
+const summaries = await Promise.all(
+  fleet.map((s) => ask(s, "Summarize what changed in this service this week")),
+);
+```
+
+`list()` enumerates the fleet; another process can `adopt` any session by name (the daemon-spawns / workers-drive split). One reliable session is just the smallest fleet.
+
+And it's a **real** session, not a headless pipe: each runs in a tmux session you can `tmux attach` into to watch the agent work — or take the keyboard yourself (one writer at a time, §4). The programmatic handle and the live session you can sit down at are the *same* session.
 
 **What this is for:** driving the *consumer-login* `claude` CLI (the one you set up with `claude login`) on a box you control — one session, or many coordinating, the way an orchestrator might run several claude sessions that talk to each other. It inherits your box's claude config (auth, permission mode, model, MCP) and passes claude's own flags through; it owns no configuration of its own (one exception: workspace trust, §4).
 
@@ -32,17 +52,18 @@ Requires Node ≥20 and a working `claude` CLI on `PATH` (you've run `claude` in
 
 ## 3. CLI usage
 
-The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "...")` on the library side. Same nine verbs, one vocabulary.
+The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "...")` on the library side. One vocabulary.
 
 ```sh
 $ npm i claudemux
 $ claudemux spawn my-job --cwd ./fresh-repo --trust-workspace
-$ claudemux send my-job "Add a CHANGELOG entry for the next release"
-$ claudemux wait my-job
-idle
-$ claudemux capture my-job
+{"agentSessionId":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}   # persist this for resume
+$ claudemux ask my-job "Add a CHANGELOG entry for the next release"
+{"outcome":{"kind":"completed"},"messages":[…],"cursor":"…"}
 $ claudemux kill my-job
 ```
+
+`ask` is the one-shot round-trip; the primitives (`send` → `wait` → `messages`) are there when you want to drive the turn yourself.
 
 The first spawn in a never-trusted folder needs `--trust-workspace` (above) — it fails closed otherwise, and the flag writes a persistent per-folder authority grant; see [Workspace trust (fail-closed)](#workspace-trust-fail-closed) before pointing it at code you don't control.
 
@@ -50,15 +71,22 @@ The full verb set:
 
 | Verb | What it does |
 |---|---|
-| `spawn <name> --cwd <path>` | Start a session; dismiss boot dialogs; return when ready |
-| `send <name> <text>` | Deliver multi-line text as one logical user turn (use `-` to pipe from stdin) |
+| `spawn <name> --cwd <path>` | Start a fresh session; dismiss boot dialogs; return when ready. Prints `{agentSessionId}` |
+| `resume <name> <agentSessionId> --cwd <path>` | Continue an existing conversation in a fresh pane (after a crash). Prints `{agentSessionId}` |
+| `send <name> <text>` | Deliver multi-line text as one logical user turn (use `-` to pipe from stdin). Prints `{cursor}` |
+| `ask <name> <text>` | One round-trip: send → wait → read. Prints `{outcome, messages, cursor}`; exit 0 iff completed |
+| `wait <name>` | Block until the turn reaches a terminal outcome; prints the `TurnOutcome` JSON (exit 0 iff completed) |
+| `messages <name> <cursor>` | Print the messages produced since `<cursor>` (from `send`/`ask`) as JSON |
+| `turn-complete <name> <cursor>` | `true`/`false` (exit 0/1): did the turn at `<cursor>` produce a reply? (the re-send signal) |
 | `interrupt <name>` | Fire ESC to stop a working agent (harmless when idle — clears the input box) |
-| `wait <name>` | Block until idle / permission-prompt / dialog; prints the state |
-| `state <name>` | Print the current state (no blocking) |
+| `respond <name> <choice>` | Answer a permission prompt: `choice` = `approve` \| `approve-for-session` \| `deny` |
+| `state <name>` | Print the current fused state (no blocking) |
 | `capture <name>` | Print the pane text; `--ansi` keeps escape codes |
 | `kill <name>` | Kill exactly that session (idempotent) |
 | `exists <name>` | `true`/`false` on stdout; exit 0/1 |
 | `list [namespace]` | Print short names in the namespace |
+
+`spawn`/`resume`/`send`/`ask`/`wait`/`state`/`capture`/… take `--agent`; the registry verbs (`kill`/`list`/`exists`) don't.
 
 Every command accepts `--namespace <name>` (default `claudemux`) so two consumers on one machine don't collide.
 
@@ -69,17 +97,86 @@ All `claudemux` invocations from the same user share one rendezvous socket (the 
 The library mirrors the CLI. The canonical 30-second example lives in [`examples/spawn-send-wait-capture.ts`](./examples/spawn-send-wait-capture.ts) and is the only canonical sample — README snippets reference it rather than duplicate it.
 
 ```ts
-import { create, type SessionHandle } from "claudemux";
+import { ask, create, type SessionHandle } from "claudemux";
 
-const session: SessionHandle = await create({
-  name: "job",
-  cwd: process.cwd(),
-});
-await session.send("Add a CHANGELOG entry");
-const finalState = await session.wait();   // "idle" | "permission-prompt" | "dialog"
-const paneText = await session.capture();
+const session: SessionHandle = await create({ name: "job", cwd: process.cwd() });
+
+// One round-trip — the 90% path:
+const { outcome, messages } = await ask(session, "Add a CHANGELOG entry");
+if (outcome.kind === "completed") console.log(messages.at(-1));
+else handleAbnormal(outcome);   // awaiting | aborted | budget-exceeded
+
 await session.kill();
 ```
+
+`wait()` returns a **`TurnOutcome`** — a discriminated union you branch on, never a thrown timeout:
+
+```ts
+const cursor = await session.send("…");
+const outcome = await session.wait({ maxMs: 60_000 });
+switch (outcome.kind) {
+  case "completed":        break;                       // reply is readable (flush-skew closed)
+  case "awaiting":         outcome.on; /* "permission-prompt" | "dialog" */ break;
+  case "aborted":          break;                       // an interrupt() stopped it
+  case "budget-exceeded":  outcome.reason; /* "idle" (stuck) | "max" (wall-clock) */ break;
+}
+```
+
+`completed` guarantees the reply is readable — a following `messagesSince(cursor)` is race-free. **`budget-exceeded` does NOT mean failed** — your patience ran out, but the turn **may still be running**, so do **not** blindly re-send (a re-send into a live turn queues or duplicates *side effects* — the worst failure). Instead poll `progress()`: `toolInFlight === true` or a freshly-advancing `transcriptCount` means *slow-but-alive* (keep waiting); a long flat `transcriptCount` with `state` not `working` means likely wedged (then `interrupt()`, don't re-send). Re-send only a turn you've confirmed never landed — `turnComplete(cursor) === false`.
+
+### Coordinating a fleet
+
+The reason for the name. Sessions are independent and addressed by `name`, so you boot many, drive each by name, and enumerate them with `list()` — keep the handles `create()` hands back:
+
+```ts
+import { create, list, kill } from "claudemux";
+
+const names = ["api", "ui", "docs"];
+const fleet = Object.fromEntries(
+  await Promise.all(
+    names.map(async (name) => [name, await create({ name, cwd: `./services/${name}` })]),
+  ),
+);
+
+await fleet.api.send("Run the tests and summarize failures");
+await fleet.ui.send("Bump the design-token version");
+
+await list();                                   // ['api', 'ui', 'docs'] — your fleet view
+for (const name of await list()) await kill({ name });
+```
+
+Names outlive your process: a daemon can `create` the fleet and separate workers can `adopt` any session by name and drive it (see [adopt](#re-adopting-a-live-session-after-a-restart-adopt)). Want fleets that can't see each other's `list()`? Give them different `namespace`s. Booting many at once is safe — no false-ready, no crosstalk — but throttling a *big* fleet on a busy box is your call, not the substrate's ([Boot concurrency is yours](#boot-concurrency-is-yours)).
+
+### Reading a turn's output (`send` → `messagesSince` / `progress`)
+
+`send()` returns a **`Cursor`** anchored at that turn. Read back the messages the
+turn produced as structured, backend-neutral `Message`s — no pane-scraping:
+
+```ts
+const cursor = await session.send("Summarize the README in one line");
+await session.wait();                          // turn settles
+const msgs = await session.messagesSince(cursor);
+// → [{ role: "user", parts: [{ kind: "text", text }] },
+//    { role: "assistant", parts: [{ kind: "text", text }, { kind: "tool", tool, summary }, …] }]
+```
+
+For *reliable* "is it working / done?", use `progress()` — fused from the agent's
+**hooks + transcript** (deterministic), not the TUI:
+
+```ts
+const p = await session.progress();
+// { phase: "prompt"|"tool"|"composing"|"done"|"unknown",
+//   toolInFlight: boolean,        // a tool is legitimately running (not hung)
+//   transcriptCount: number,
+//   hookChannelHealthy: boolean,  // false → degraded to best-effort pane fallback
+//   agentChannelHealthy: boolean, // false → ALL channels blind vs a non-empty pane (likely a claude-version drift)
+//   state }
+```
+
+Patience is **yours**: poll `progress()` until `phase === "done"` (or your own
+budget elapses) — claudemux reports the signal, never an idle timeout. Hooks are
+injected on spawn by default; opt out with `create({ hooks: false })` (observe
+then degrades to the pane fallback and says so via `hookChannelHealthy: false`).
 
 Bare-name operations (no handle needed):
 
@@ -90,6 +187,63 @@ await exists({ name: "job" });        // boolean
 await list();                         // string[] of names in the default namespace
 await kill({ name: "job" });          // idempotent
 ```
+
+### Resuming a conversation after a crash (`resume()` + `turnComplete()`)
+
+`resume()` is a first-class lifecycle peer of `create()` (start fresh) and `adopt()`
+(re-attach to a *running* pane). It continues an existing conversation in a **fresh
+pane** — the recovery path when the box lost the tmux server mid-turn. Pass the
+`agentSessionId` you persisted:
+
+```ts
+import { create, resume } from "claudemux";
+
+const s = await create({ name: "job", cwd });
+const id = s.agentSessionId!;            // persist { name: "job", agentSessionId: id }
+const cursor = await s.send("…long task…");
+// …the box crashes mid-turn; your daemon restarts…
+
+const s2 = await resume({ name: "job-2", cwd, agentSessionId: id });   // history intact
+```
+
+**What to re-send.** A turn that was in flight when the pane died is left in the
+transcript as a prompt with **no reply**. `turnComplete(cursor)` tells you — `false`
+means re-send that prompt; earlier completed turns return `true` and are left alone:
+
+```ts
+if (!(await s2.turnComplete(cursor))) {
+  await s2.send("…long task…");          // the in-flight turn was lost — re-send it
+}
+```
+
+`send()` returns a real cursor when delivery is confirmed. When no user record
+appears it returns one of two exported sentinels — both detectable, both reading
+empty against `messagesSince`/`turnComplete` (never a whole-transcript slice):
+
+- `DELIVERED_QUEUED` — the session was **busy** and the agent **queued** the
+  message (claude shows "Press up to edit queued messages"). It is accepted and
+  runs after the in-flight turn — **do not re-send** (that double-runs). `wait()`
+  out the current turn, let the queued one run, then read with a fresh cursor.
+- `DELIVERY_UNCONFIRMED` — no evidence it landed. Before returning this, `send()`
+  already retries a **lost submit** itself: if the paste reached the composer but
+  the Enter didn't register, it re-fires Enter once (it never re-pastes, so it
+  can't duplicate your text) and re-checks. `DELIVERY_UNCONFIRMED` means even that
+  recovery found nothing — safe to re-send.
+
+Distinguishing the two is the point: a queued message is *not* lost, so treating
+every unconfirmed send as "re-send" would double-run work issued into a busy
+session. (A still-*running* pane after a daemon restart is `adopt()`, not
+`resume()` — see below.)
+
+**Resume vs adopt vs fork.** Three recovery/branch shapes, all over the same boot core:
+- **`recover({ name, agentSessionId, cwd })`** — the one you usually want on daemon boot. It composes the two below into one call: tries `adopt`; if the pane is gone (a crash), `resume`s it. Returns `{ session, status }` where `status` is `"attached"` (pane survived) or `"resumed"` (it had crashed) — so "did it crash?" is a *field*, not a `try/catch` you write. The re-send decision stays yours: `if (status === "resumed" && !(await session.turnComplete(lastCursor))) await session.send(lastPrompt)`. Reach for the two primitives below directly when you want explicit control.
+- **`adopt(name)`** — re-attach to a pane that is **still running** (your daemon restarted but the tmux server lived). Inherits the live session; no re-boot.
+- **`resume({ agentSessionId })`** — the pane **died**; continue the *same* conversation in a fresh pane. History intact; the id is preserved.
+- **Fork** — branch a *new* conversation off an existing one's history. There's no `fork()` verb; it's an `extraArgs` recipe: `create({ name, cwd, extraArgs: ["--resume", id, "--fork-session"] })`. claude replays `id`'s history into a **new** conversation that diverges from the original (both continue independently). **Caveat (verified):** the fork's id is **unknowable** up front — `agentSessionId` is `undefined`, so claudemux can only locate the fork's transcript once its first hook edge reports the path, which means the **first `send()` may return `DELIVERY_UNCONFIRMED`** (it couldn't anchor before the path resolved) and `messagesSince`/`turnComplete` are unavailable until then. Use fork for fire-and-forget branches, or read the branch via `capture()`; for a fully readable branch, prefer `resume()` (same id) over fork.
+
+### Boot concurrency is yours
+
+claudemux exposes **no** spawn-throttle. `create()` reports each session's readiness independently and honestly (it boots or throws `ReplTimeout` — never a false-ready, never crosstalk between concurrent boots), but spawning a fleet at once is a load decision the substrate doesn't make for you. If you boot many sessions on a busy box, **serialize or semaphore the `create()` calls yourself** (mechanism, not policy — same north star as patience).
 
 ### Interrupting a working agent (`interrupt()`)
 
@@ -103,9 +257,8 @@ if ((await session.state()) === "working") {
 
 Gating on `state()` like this is **not atomic** with the interrupt — there's a window between the read and the ESC landing. It matters most from the CLI, where `state` and `interrupt` are *separate processes*: a short turn can finish in the gap, so the ESC reaches an already-idle agent. That's a harmless no-op (it clears the input box), not an error — but if you need the interrupt to reliably catch a turn, do the `state()` check and `interrupt()` in one **tight in-process sequence**, and don't trust a `working` reading carried over from an earlier separate process.
 
-> ⚠️ **After `interrupt()`, `state()` reads `unknown` — not `idle`.** claude does not return to a clean prompt: it **restores the interrupted message back into the composer**. Two things follow, and missing either corrupts your next turn:
+> ⚠️ **After `interrupt()`, `state()` reads `unknown` and `wait()` resolves `{ kind: "aborted" }`.** claude does not return to a clean prompt: it **restores the interrupted message back into the composer**. The handle records the interrupt authoritatively (an interrupt fires no `stop` hook and leaves the spinner's "esc to interrupt" frozen in scrollback, so neither channel alone can tell aborted from working); the record clears on your next `send()`. One thing still bites:
 >
-> - **Do not `wait()`-for-idle after `interrupt()`.** `wait()` settles a turn it observed *run* (it arms on the baseline `send` writes). After an interrupt no turn is in flight and no baseline exists, and the frame is `unknown`, so `wait()` never settles — it times out (`ReplTimeout`).
 > - **Do not naively `send()` a replacement after `interrupt()`.** `send()` pastes into the *non-empty* composer (the restored message), so what gets submitted is the two texts concatenated.
 
 **Interrupt and replace** (claude-specific; there is deliberately no `interruptAndSend()`). To send a clean replacement you must first clear the restored composer. claude's only substrate-reachable composer clear is repeated ESC (its *"Esc again to clear"* ladder — `interrupt()` again), so clear by **observing the composer empty**, not by blind-counting keystrokes:
@@ -131,9 +284,9 @@ import {
   SessionExists,         // create() collision; never silently adopts
   LoginRequired,         // claude isn't authenticated; run `claude` interactively first
   DialogStuck,           // a known dialog matched but didn't advance after the response
-  ReplTimeout,           // boot or wait budget elapsed before the state settled
-  PaneDead,              // the pane's process died (with the signal)
-  SessionGone,           // the session vanished from the backend
+  ReplTimeout,           // boot budget elapsed before the REPL settled (wait() returns budget-exceeded, never throws)
+  SessionGone,           // the session vanished from the backend (a crash, a kill, or the server died) — every per-session op
+  TranscriptUnlocatable, // a read on a session whose transcript can't be located (no recoverable id / hook path)
   AgentExitedDuringBoot, // the agent exited before ready — usually an agentSessionId collision
   InvalidSessionName,    // name was empty, too long, or had illegal characters
   InvalidAgentSessionId, // a supplied agentSessionId wasn't a v4 UUID
@@ -174,22 +327,16 @@ field name keeps the API alive across a backend swap). claudemux now **always**
 injects the id — a deliberate, stable surface you may depend on. Two jobs it
 does:
 
-- **Resume a crashed conversation.** Resume rides `extraArgs`, not a neutral
-  option — `--resume`/`--fork-session` are claude vocabulary, and only *identity*
-  (neutral) earns a first-class field:
+- **Resume a crashed conversation** via the first-class `resume()` (see *Resuming
+  a conversation after a crash*, above) — the neutral lifecycle peer of
+  `create()`/`adopt()`. (The vendor `--resume` flag stays
+  inside the agent seam; you pass a neutral `agentSessionId`.)
   ```ts
-  const resumed = await create({ name: "job2", cwd, extraArgs: ["--resume", id] });
+  const resumed = await resume({ name: "job2", cwd, agentSessionId: id });
   ```
-- **Locate the transcript.** claude stores it keyed by id; derive the path from
-  `(cwd, agentSessionId)` — every `/` in the absolute cwd becomes `-`:
-  ```ts
-  // ~/.claude/projects/<cwd-with-slashes-as-dashes>/<agentSessionId>.jsonl
-  const slug = cwd.replace(/\//g, "-");
-  const transcript = `${homedir()}/.claude/projects/${slug}/${id}.jsonl`;
-  ```
-  (The slug rule is claude-storage detail; claudemux ships no `transcriptPath`
-  helper this release. claudemux does not read or parse transcripts — it returns
-  the id; reading the file is yours.)
+- **Read the conversation** with `messagesSince(cursor)` — claudemux locates and
+  parses the transcript for you (preferring the path the agent's hook reports), so
+  you don't reconstruct claude's storage layout.
 
 **Choosing the id for a fresh conversation.** Pass `agentSessionId` to pick it
 yourself (validated as a v4 UUID; **caller-wins** — your own `extraArgs` identity
@@ -240,17 +387,16 @@ const where = await session.state();             // ← ALWAYS do this before yo
 
 | Symptom after `adopt()` | State | What happened | Recovery |
 |---|---|---|---|
-| `adopt()` throws `SessionGone` | **A** | the process exited — a crashed `claude` tears down the whole session, so absence is clean | re-`create()` with `--resume <agentSessionId>` |
-| handle returned, but `state()`/`wait()` never settles | **B** | the pane is attached but **wedged** | `kill()` **then** re-`create()` with `--resume` |
-| handle returned, but `capture()`/`state()` throws `PaneDead` | **C** | the pane container survives but its **process is dead** | `kill()` + re-`create()` with `--resume` |
+| `adopt()` throws `SessionGone` | **A** | the process exited — a crashed `claude` tears down the whole session (the substrate runs `remain-on-exit off`, so a dead pane is reaped, never left as a husk), so absence is clean | `resume({ name, cwd, agentSessionId })` |
+| handle returned, but `state()`/`wait()` never settles, or `state()` throws `SessionGone` mid-check | **B** | the pane is attached but **wedged**, or vanished between adopt and the read | `kill()` **then** `resume(…)` |
 
-The full recovery loop — adopt, then fall back to re-create with `--resume` for each of A/B/C — is in [`examples/adopt-after-restart.ts`](./examples/adopt-after-restart.ts). `adopt()` re-establishes and re-verifies **nothing**: it inherits whatever authority context the original `create()` set up (trusted folders, permission mode, MCP) — it does not re-grant or re-check any of it.
+The full recovery loop — adopt, then fall back to `resume()` — is in [`examples/adopt-after-restart.ts`](./examples/adopt-after-restart.ts). (Or just call `recover()`, which does this whole dance and tells you `attached` vs `resumed`.) `adopt()` re-establishes and re-verifies **nothing**: it inherits whatever authority context the original `create()` set up (trusted folders, permission mode, MCP) — it does not re-grant or re-check any of it.
 
 #### Persist *two* things per session — one fails loud, the other fails silent
 
-To recover a session you must persist **both** the `agentSessionId` (for `--resume`) **and** which agent def it was created with — and their failure modes are opposite:
+To recover a session you must persist **both** the `agentSessionId` (for `resume()`) **and** which agent def it was created with — and their failure modes are opposite:
 
-- **Forget the `agentSessionId` → you find out at once.** Re-`create()` without `--resume` starts a fresh conversation (or errors). Loud.
+- **Forget the `agentSessionId` → you find out at once.** Without it `resume()` has nothing to continue and you start a fresh conversation (or error). Loud.
 - **Forget or mismatch the agent def → it lies silently.** `state()`/`wait()` classify the live pane against **the agent you pass to `adopt()`**, not the one the session was created with. Pass the wrong agent and the classifier reports the wrong state with no error. This is a *dormant-then-armed* footgun: harmless while `claude` is the only agent you ship, armed the day you ship a custom one.
 
 #### Single-writer is *your* job — claudemux holds no lock
@@ -263,37 +409,57 @@ Exactly one writer per pane at any instant. claudemux serializes calls **within 
 
 #### Recovering many sessions at once — watch for the storm
 
-Because a cleanly-down backend server reports `false` for *every* session, all your `adopt()` calls return `SessionGone` at the same instant — and "re-create N sessions with `--resume`" fired N times against a host whose backend just restarted is a recovery storm. **If you're recovering more than one session and they *all* report `SessionGone`, probe `list()`/`exists()` once for the batch before re-creating.** A uniformly-empty result is a server-restart event, not N independent session deaths.
+Because a cleanly-down backend server reports `false` for *every* session, all your `adopt()` calls return `SessionGone` at the same instant — and `resume()`-ing N sessions fired against a host whose backend just restarted is a recovery storm. **If you're recovering more than one session and they *all* report `SessionGone`, probe `list()`/`exists()` once for the batch before re-creating.** A uniformly-empty result is a server-restart event, not N independent session deaths.
 
 ## 5. State model
 
-`state()` and `wait()` report one of five values. The classifier scans only the bottom-N lines of the pane, so a stray match in scrollback can't fire by construction.
+**`state()`** is a point-in-time snapshot — the one fused belief (hooks + transcript + pane), not a raw screen scrape. It reports one of five values:
 
 | State | Meaning |
 |---|---|
 | `working` | The agent is producing output (streaming, tool calls, spinners). |
-| `idle` | The REPL is ready for input — the input box is showing the ready marker and the pane has been stable briefly. |
-| `permission-prompt` | The agent is waiting on a permission decision. **Reserved for v0.1 — not emitted in v0.0.1 (see below).** |
+| `idle` | The REPL is ready for input — the ready box is showing and the pane has been stable briefly. |
+| `permission-prompt` | The agent is paused on a tool-approval prompt — answer it with `respond()` (see below). |
 | `dialog` | The agent is showing a system dialog (theme picker, trust prompt, etc.). |
 | `unknown` | No predicate fired; consumers must not treat as idle. |
 
-`wait()` returns as soon as state ∈ `{idle, permission-prompt, dialog}` — those are the three "actionable" states. `unknown` is a contractual "the substrate doesn't recognize what's on the pane" return value; treating it as idle would race against a turn still in flight. Default `wait()` timeout is 5 minutes; pass `{ timeoutMs }` to override.
+**`wait()`** returns a **`TurnOutcome`** — "the turn stopped, and why" — never a thrown timeout:
 
-**Permission prompts in v0.0.1.** claudemux owns no configuration — you set claude's permission mode (see §1). v0.0.1 therefore does **not** detect mid-turn tool-approval prompts: the `permission-prompt` state exists in the type but is never emitted, and a prompt classifies as `unknown` (never as `idle` — so it is never mistaken for a finished turn). The consequence: a session left in interactive `default` mode that hits a prompt has no one to answer it, so `wait()` runs out its budget and throws `ReplTimeout`. **Run unattended sessions in a non-interactive permission mode** — e.g. spawn claude with `--permission-mode acceptEdits` (or `bypassPermissions`), or set it in `~/.claude`. v0.1 adds prompt detection together with a `respond()` primitive so you can answer prompts programmatically (and starts emitting the reserved `permission-prompt` state — a non-breaking change for consumers already handling the documented return type).
+| `outcome.kind` | Meaning |
+|---|---|
+| `completed` | The turn finished **and its reply is readable** (the ~100ms hook→transcript flush skew is closed). |
+| `awaiting` | Paused on a modal only the pane sees — `outcome.on ∈ {permission-prompt, dialog}`. |
+| `aborted` | An `interrupt()` stopped it. |
+| `budget-exceeded` | One of **your** patience bounds ran out — `outcome.reason: "idle"` (no progress for `idleMs`) vs `"max"` (wall-clock `maxMs`). **Not "failed"** — poll again, don't blindly re-send. |
+
+`wait()` is the compound owner of the done-decision: it composes the Observer's belief with **your** patience. The library owns **none** — there is no default timeout. Pass `wait({ maxMs })` (wall-clock cap), `wait({ idleMs })` (give up after no progress for that long — a *working* turn or a tool in flight never trips it, only a genuinely stuck one), or both; with neither, `wait()` blocks until a terminal outcome and never invents a deadline. "Time is the policy's." (`progress()` is the same belief without the wait — `{ phase, toolInFlight, transcriptCount, hookChannelHealthy, agentChannelHealthy, state }`; poll it and apply your own patience if you'd rather not block. `agentChannelHealthy: false` is the **drift canary** — every observe channel came up blind against a non-empty pane, the signature of a Claude Code version moving the format out from under the parsers; treat persistent `false` as "re-check your version assumptions.")
+
+**Permission prompts.** claudemux owns no configuration — you set claude's permission mode (see §1). A session left in interactive `default` mode that hits a mid-turn tool-approval prompt (`Do you want to create hello.txt?` → `1. Yes / 2. Yes, allow all… / 3. No`) surfaces it as a first-class state: `state()` reads `permission-prompt`, and `wait()` returns `{ kind: "awaiting", on: "permission-prompt" }` instead of timing out. Answer it with **`respond(choice)`** — `"approve"` (this once), `"approve-for-session"` (allow the rest of the session), or `"deny"`. The natural loop is the analog of `send → wait`:
+
+```ts
+let outcome = await session.wait();
+while (outcome.kind === "awaiting" && outcome.on === "permission-prompt") {
+  await session.respond("approve"); // your policy decision — claudemux never auto-answers
+  outcome = await session.wait();   // wait for the turn to actually finish (or the next prompt)
+}
+```
+
+`respond()` is a mechanism, not policy: choosing *whether* to approve is yours (claudemux never auto-approves an authority grant). It fires the keystroke unconditionally — gate it on a `permission-prompt` reading taken in the same quick sequence (the prompt is stable; it won't resolve underfoot). If you'd rather not field prompts at all, **run unattended sessions in a non-interactive permission mode** — spawn claude with `--permission-mode acceptEdits` (or `bypassPermissions`), or set it in `~/.claude`. (Detection requires the hook + pane observe channels; a denied tool fires no completing hook edge, so the settled idle pane is what tells `wait()` the turn ended — see §6.)
+
+> ⚠️ **The gate is only there if the *mode* is.** Permission mode is inherited from your box's claude config (claudemux owns none of it), so the inverse of the line above also holds: if `~/.claude/settings.json` sets `permissions.defaultMode: "bypassPermissions"` (or `acceptEdits` for edits) — the common unattended-daemon setup — claude runs tools **un-gated** and the `permission-prompt` state **never appears**. `wait()` will correctly return `completed` (the tool already ran), not `awaiting`. So if you *depend* on programmatic approve/deny, don't assume the host is in `default` — **force it per session**: `create({ …, extraArgs: ["--permission-mode", "default"] })` (a CLI flag overrides `settings.json`). Verified against claude 2.1.163.
 
 ## 6. Architecture
 
-The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — `create`, `send`, `wait`, `state`, `capture`, `kill`, `exists`, `list` — has no concept of tmux. A future backend (node-pty, `CustomPaneBackend`, anything that satisfies the internal seam) slots in without rewriting `import { create } from "claudemux"`.
+The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — the lifecycle (`create`/`resume`/`adopt`/`exists`/`kill`/`list`), the per-session verbs (`send`/`wait`/`messagesSince`/`turnComplete`/`state`/`progress`/`interrupt`/`respond`/`capture`), and the `ask` composer — has no concept of tmux. A future backend (node-pty, anything that satisfies the internal seam) slots in without rewriting `import { create } from "claudemux"`.
 
-Three small seams compose the whole substrate:
+**Read/write split.** The substrate *drives* via the write surface (tmux send-keys/paste) but *observes* via reliable channels: the agent's lifecycle **hooks** (injected at spawn → a per-session rendezvous file) + the on-disk **transcript**, with the pane as a marked fallback. Four small seams compose it:
 
 - **`Backend`** — drives a named pane: spawn, send keys, paste, capture text, kill. Knows nothing about claude.
-- **`AgentDef`** — claude-specific in exactly one place (`src/agents/claude.ts`): the spawn argv, the boot-dialog matchers + responses, the ready detector, the classifier predicates.
-- **`Classifier`** — a six-line dispatch mapping pane text → state, taking per-agent rules. The "dialog must be checked before idle" invariant is enforced by the function's structure.
+- **`AgentDef`** — claude-specific in exactly one place (`src/agents/claude.ts`): the spawn argv + flags, boot-dialog matchers, the ANSI-aware ready detector, the classifier predicates, and the transcript/hook **grammar** (parse a transcript record / a hook marker into neutral types). Adding `codex` = adding one file.
+- **`Observer`** — the single owner of "what's true": fuses hook edges + transcript + a pre-classified pane into one belief. `state()`/`progress()` read it; `wait()` composes it with a patience budget into a `TurnOutcome`. No caller forms its own belief.
+- **`Classifier`** — pane text → state via per-agent rules; "dialog before idle" is enforced structurally.
 
-Layering is grep-enforced in CI: `src/backends/**` never imports from `src/agents/**` and vice versa. No tmux concepts appear in `src/index.ts`, public types, or `--help` output.
-
-Read the codebase top-down and the architecture is the file layout. There is no plugin registry, no second-backend stub, no observability framework beyond `onBackendCommand` (one event per backend call — that's the entire observability surface).
+Layering is grep-enforced in CI: `src/backends/**` never imports from `src/agents/**` and vice versa, and no claude/transcript vocabulary leaks out of `src/agents/`. No tmux concepts appear in `src/index.ts`, public types, or `--help` output.
 
 ## 7. Compatibility
 
@@ -308,7 +474,7 @@ Read the codebase top-down and the architecture is the file layout. There is no 
 on every cell of the matrix. Windows-native support is not on the roadmap; WSL
 is community-contributable, undocumented by us.
 
-`claude` is the only supported agent in v0.0.1. The architecture allows additional agents (`codex`, etc.) via `AgentDef`; real demand will pull alternatives in.
+`claude` is the only supported agent today. The architecture allows additional agents (`codex`, etc.) via `AgentDef`; real demand will pull alternatives in.
 
 ## 8. Contributing
 

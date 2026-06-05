@@ -84,6 +84,20 @@ for c in "${TMUX_CMD_STRINGS[@]}"; do
   fi
 done
 
+# Transcript / JSONL vocabulary — claude's on-disk session-log knowledge (the
+# `.jsonl` extension, the `.claude/projects` location, the `message.content`
+# record shape) must stay in src/agents/**. The agent-agnostic Observer reads
+# the transcript via AgentDef.transcript.* and never knows the schema or path
+# rule. Comment lines and *.test.ts are exempt.
+TRANSCRIPT_VOCAB='\.jsonl|\.claude/projects|message\.content'
+if matches=$(grep -rEHn --include='*.ts' --exclude='*.test.ts' -- "$TRANSCRIPT_VOCAB" "$ROOT/src/" 2>/dev/null | grep -v '/agents/' | filter_code_lines); then
+  if [ -n "$matches" ]; then
+    echo "layering-grep: transcript/jsonl vocabulary outside src/agents/ — banned (use AgentDef.transcript.*)" >&2
+    echo "$matches" >&2
+    violations=$((violations + 1))
+  fi
+fi
+
 if [ "$violations" -gt 0 ]; then
   echo "layering-grep: $violations violation(s) found" >&2
   exit 1

@@ -19,7 +19,7 @@ import { type TmuxExec, classifyTmuxFailure } from "./exec.js";
  * `LC_ALL=C.UTF-8` lives on the session env (`-e` on new-session), so it is
  * not in this list.
  */
-export const SERVER_OPTION_COMMANDS: ReadonlyArray<readonly string[]> = [
+const SERVER_OPTION_COMMANDS: ReadonlyArray<readonly string[]> = [
   ["set-option", "-g", "escape-time", "0"],
   ["set-option", "-g", "default-terminal", "tmux-256color"],
   ["set-window-option", "-g", "history-limit", "50000"],

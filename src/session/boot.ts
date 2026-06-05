@@ -9,8 +9,9 @@ import {
   WorkspaceUntrusted,
 } from "../errors.js";
 import { stabilize } from "../io/stabilize.js";
+import { readHookEdges } from "../observe/observer.js";
 import { sleep } from "../util/sleep.js";
-import { CLASSIFIER_BOTTOM_N } from "./constants.js";
+import { CLASSIFIER_BOTTOM_N, CLASSIFIER_CAPTURE } from "./constants.js";
 import { formatSessionLabel } from "./ref.js";
 
 /**
@@ -65,11 +66,37 @@ export interface BootOptions {
    * minted-id boot-death to "id in use" would mislead.
    */
   agentSessionId?: string;
+  /**
+   * Path to the session's hook rendezvous file, when hooks were injected
+   * (default-on). When set, boot **gates** readiness on the agent's
+   * `SessionStart` hook edge appearing here: a ready-looking pane alone never
+   * declares ready until the edge fires. Verified against claude 2.1.162:
+   * `SessionStart` fires only *after* any boot dialog is dismissed, once input
+   * is interactive — so an edge can never signal ready while a dialog is up.
+   * After the edge, boot still waits for a *stable* `isReady` pane (the first
+   * send otherwise races the welcome/MCP render storm and is lost). Omitted
+   * under `create({ hooks: false })`, where the pane is the only ready signal.
+   */
+  rendezvousPath?: string;
 }
 
 /**
- * Boot the session: dismiss any matching dialogs in order, then wait for the
- * agent's ready predicate to hold *stably*. Throws on the documented failures.
+ * Boot the session: dismiss any matching dialogs in order, then wait for ready.
+ *
+ * **Ready signal:** a hook *gate* plus a pane *settle*.
+ *   1. **`session-start` hook edge — the authoritative "started" gate.** With
+ *      hooks on (the default, `opts.rendezvousPath` set), boot will not declare
+ *      ready until this edge fires — a ready-*looking* pane is NOT trusted on
+ *      its own (the founder's "hooks, not screen-scraping" north star). The edge
+ *      lands only once input is interactive and post-dialog. With hooks off
+ *      there is no edge, so the pane is the only signal.
+ *   2. **Stable ready box — the delivery-safety settle.** Even after "started,"
+ *      a fresh REPL is still painting its welcome/MCP render, and the *first*
+ *      send pasted into that render storm is silently lost (verified). So boot
+ *      returns only once the ready box has held *stable*, guaranteeing the input
+ *      is paintable. Dialogs are handled before either check each iteration.
+ *
+ * Throws on the documented failures.
  *
  * @throws `WorkspaceUntrusted` if the workspace-trust dialog fires and
  *   `trustWorkspace` was not set — thrown *before* any keystroke, so no
@@ -91,13 +118,20 @@ export async function bootSession(
   const cwd = opts.cwd ?? ref.name;
   const start = Date.now();
 
+  // The rendezvous is reused across resume, so it may ALREADY hold the prior
+  // life's `session-start`. Baseline the count now and wait for a NEW one — else
+  // a resume boots "ready" on a stale edge (clock-independent: count, not time).
+  const priorStarts = countSessionStarts(agent, opts.rendezvousPath);
+
   while (true) {
     if (Date.now() - start > timeoutMs) {
       throw new ReplTimeout(formatSessionLabel(ref), timeoutMs);
     }
     const text = await captureDuringBoot(backend, ref, opts.agentSessionId);
 
-    // Try every dialog matcher in order — the first that fires wins.
+    // Try every dialog matcher in order — the first that fires wins. Dialogs
+    // are always handled before any ready check (hook or pane), so neither can
+    // declare ready while a dialog is still on screen.
     const matched = agent.boot.dialogs.find((d) => d.matches(text));
     if (matched) {
       await respondToDialog(backend, ref, matched, trustWorkspace, cwd);
@@ -107,8 +141,24 @@ export async function bootSession(
       continue; // re-evaluate from the top
     }
 
-    // No dialog fired. Is the REPL ready — AND stable? The empty prompt can
-    // appear mid-render before input is interactive; require it to hold.
+    // Authoritative "session has started" gate: the agent's SessionStart hook
+    // edge (when hooks are on). The edge only lands once input is interactive
+    // and post-dialog, so we DON'T trust a ready-looking pane until it fires —
+    // that is the founder's "hooks, not screen-scraping" north star. With hooks
+    // off, there is no edge, so the pane is the only signal.
+    const hooksOn = opts.rendezvousPath !== undefined;
+    const started = !hooksOn || countSessionStarts(agent, opts.rendezvousPath) > priorStarts;
+    if (!started) {
+      await sleep(POLL_INTERVAL_MS); // session not started yet — wait for the edge
+      continue;
+    }
+
+    // Started — but a fresh REPL is still painting its welcome/MCP render, and a
+    // paste into that render storm is silently lost (verified: the first send
+    // races a repaint). So gate the RETURN on a *stable* ready box: the hook
+    // says "started", the pane settle says "the input is paintable now." The
+    // empty box can also flash mid-render, so requiring it to hold is necessary
+    // regardless of the hook.
     if (agent.boot.isReady(text)) {
       const remaining = Math.max(0, timeoutMs - (Date.now() - start));
       const r = await stabilize(backend, ref, {
@@ -116,6 +166,7 @@ export async function bootSession(
         windowMs: READY_STABLE_WINDOW_MS,
         pollMs: POLL_INTERVAL_MS,
         timeoutMs: Math.min(remaining, READY_STABLE_WINDOW_MS * 6),
+        ansi: true,
       });
       // Re-confirm ready on the settled pane (the render may have moved to a
       // dialog or back to working; only a stable ready counts).
@@ -125,13 +176,19 @@ export async function bootSession(
       continue; // not stable yet (still rendering) — loop and re-evaluate
     }
 
-    // Neither dialog nor ready — keep polling.
+    // Started but the box isn't ready yet (still rendering) — keep polling.
     await sleep(POLL_INTERVAL_MS);
   }
 }
 
 function anyDialog(agent: AgentDef, text: string): boolean {
   return agent.boot.dialogs.some((d) => d.matches(text));
+}
+
+/** How many `session-start` edges the rendezvous holds (0 when hooks off/absent). */
+function countSessionStarts(agent: AgentDef, rendezvousPath: string | undefined): number {
+  if (rendezvousPath === undefined) return 0;
+  return readHookEdges({ agent, rendezvousPath }).filter((e) => e.event === "session-start").length;
 }
 
 /**
@@ -159,7 +216,7 @@ async function captureDuringBoot(
   agentSessionId: string | undefined,
 ): Promise<string> {
   try {
-    return await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+    return await backend.capture(ref, CLASSIFIER_CAPTURE);
   } catch (err) {
     if (err instanceof BackendUnreachable) throw err;
     const alive = await backend.exists(ref).catch(() => false);
@@ -229,7 +286,7 @@ async function waitForAdvancement(
   const start = Date.now();
   while (Date.now() - start < DIALOG_ADVANCE_BUDGET_MS) {
     await sleep(POLL_INTERVAL_MS);
-    const now = await backend.capture(ref, { lines: CLASSIFIER_BOTTOM_N });
+    const now = await backend.capture(ref, CLASSIFIER_CAPTURE);
     if (!matched.matches(now)) return;
   }
   throw new DialogStuck(formatSessionLabel(ref), matched.id);

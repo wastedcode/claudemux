@@ -1,14 +1,11 @@
-import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, SessionRef } from "../backends/types.js";
+import type { Backend } from "../backends/types.js";
 import { SessionExists } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { bootSession } from "./boot.js";
-import { AGENT_SESSION_ID_META_KEY, DEFAULT_NAMESPACE } from "./constants.js";
-import { sharedDefaultBackend } from "./default-backend.js";
-import { makeHandle } from "./handle.js";
 import { formatSessionLabel } from "./ref.js";
-import { validateAgentSessionId, validateNamePart } from "./validate.js";
+import { resolveSessionContext } from "./resolve.js";
+import { spawnBootHandle } from "./spawn-boot.js";
+import { validateAgentSessionId } from "./validate.js";
 
 /**
  * Options for {@link create}. The substrate provides sensible defaults so
@@ -34,9 +31,10 @@ export interface CreateOptions {
    * {@link SessionHandle.agentSessionId} reports. Leave unset for the common
    * case: the substrate mints a v4 UUID for you.
    *
-   * Resume is **not** this option — it rides `extraArgs` (`--resume <id>`).
-   * Passing both this and an `extraArgs` identity flag (`--session-id` /
-   * `--resume` / `--fork-session`) is a conflict → {@link AgentSessionIdConflict}.
+   * Resume is **not** this option — use the first-class {@link resume} (or, for
+   * an advanced case, an `extraArgs` `--resume <id>`). Passing both this and an
+   * `extraArgs` identity flag (`--session-id` / `--resume` / `--fork-session`)
+   * is a conflict → {@link AgentSessionIdConflict}.
    */
   agentSessionId?: string;
   /** Override env passed to the agent process. */
@@ -52,6 +50,14 @@ export interface CreateOptions {
    * caveats before enabling it for untrusted-fork (PR-bot / CI) workloads.
    */
   trustWorkspace?: boolean;
+  /**
+   * Inject the agent's observe hooks at spawn (default **true**). Hooks give
+   * claudemux deterministic, reliable turn-lifecycle insight without scraping
+   * the TUI. Set `false` to opt out (e.g. you manage your own hooks); observe
+   * then degrades to the best-effort pane+transcript fallback. The exact
+   * injected settings are inspectable via the agent's hook spec.
+   */
+  hooks?: boolean;
 }
 
 /**
@@ -86,12 +92,7 @@ export interface CreateOptions {
  * ```
  */
 export async function create(opts: CreateOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
-  validateNamePart("namespace", namespace);
-  validateNamePart("name", opts.name);
-  const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? sharedDefaultBackend();
-  const ref: SessionRef = { namespace, name: opts.name };
+  const { ref, agent, backend } = resolveSessionContext(opts);
 
   // Exists-check first. Never silently adopt an existing session — that is
   // the lifecycle-policy footgun claudemux explicitly avoids.
@@ -99,66 +100,26 @@ export async function create(opts: CreateOptions): Promise<SessionHandle> {
     throw new SessionExists(formatSessionLabel(ref));
   }
 
-  // Resolve the conversation id we'll ask the agent to run under. The mint is
-  // neutral (crypto.randomUUID() — no agent vocabulary); a caller-supplied id
-  // is validated as a v4 UUID before we pass it on. The agent's buildArgv owns
-  // what actually runs (it may suppress the mint for a caller's extraArgs
-  // identity flag), so we surface the id buildArgv RETURNS, never `sessionId`
-  // directly — single source of truth, and create.ts stays agent-agnostic.
-  const explicitId = opts.agentSessionId !== undefined;
-  if (explicitId) {
+  // Resolve the FRESH conversation id. The mint is neutral (crypto.randomUUID —
+  // no agent vocabulary); a caller-supplied id is validated as a v4 UUID. The
+  // agent's buildArgv decides how it becomes a flag and returns the id that will
+  // actually run, which `spawnBootHandle` surfaces (single source of truth).
+  const explicit = opts.agentSessionId !== undefined;
+  if (explicit) {
     validateAgentSessionId(opts.agentSessionId as string);
   }
-  const sessionId = explicitId ? (opts.agentSessionId as string) : crypto.randomUUID();
+  const sessionId = explicit ? (opts.agentSessionId as string) : crypto.randomUUID();
 
-  const argvBuild = agent.buildArgv({
-    cwd: opts.cwd,
-    sessionId,
-    sessionIdExplicit: explicitId,
-    sessionName: formatSessionLabel(ref),
-    ...(opts.extraArgs ? { extraArgs: opts.extraArgs } : {}),
-  });
-  const agentSessionId = argvBuild.agentSessionId;
-  const mergedEnv: Record<string, string> = { ...(argvBuild.env ?? {}), ...(opts.env ?? {}) };
-  await backend.spawn({
-    namespace,
-    name: opts.name,
-    cwd: opts.cwd,
-    env: mergedEnv,
-    cmd: argvBuild.cmd,
-    argv: argvBuild.argv,
-  });
-
-  try {
-    await bootSession(backend, agent, ref, {
-      cwd: opts.cwd,
-      // Carry the caller-chosen id (not the mint) so a boot-death — almost
-      // always an id collision — is actionable. A v4 mint never collides.
-      ...(explicitId ? { agentSessionId: opts.agentSessionId } : {}),
-      ...(opts.bootTimeoutMs === undefined ? {} : { timeoutMs: opts.bootTimeoutMs }),
-      ...(opts.trustWorkspace === undefined ? {} : { trustWorkspace: opts.trustWorkspace }),
-    });
-  } catch (err) {
-    await backend.kill(ref).catch(() => undefined);
-    throw err;
-  }
-
-  // Best-effort: cache the id as a session-scoped meta so adopt() can recover
-  // it after the creating process dies. This is NOT load-bearing — the id is
-  // already on the returned handle (claude IS running under it); a failed write
-  // just means a later adopt() reports `undefined` and the consumer falls back
-  // to its own store. A failing setSessionMeta must never fail create().
-  if (agentSessionId !== undefined) {
-    await backend
-      .setSessionMeta(ref, AGENT_SESSION_ID_META_KEY, agentSessionId)
-      .catch(() => undefined);
-  }
-
-  return makeHandle({
-    backend,
+  return spawnBootHandle({
     agent,
-    namespace,
-    name: opts.name,
-    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    backend,
+    ref,
+    cwd: opts.cwd,
+    identity: { mode: "fresh", sessionId, explicit },
+    hooks: opts.hooks !== false,
+    ...(opts.extraArgs === undefined ? {} : { extraArgs: opts.extraArgs }),
+    ...(opts.env === undefined ? {} : { env: opts.env }),
+    ...(opts.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: opts.bootTimeoutMs }),
+    ...(opts.trustWorkspace === undefined ? {} : { trustWorkspace: opts.trustWorkspace }),
   });
 }

@@ -20,14 +20,17 @@ async function main(): Promise<void> {
       bootTimeoutMs: 60_000,
     });
 
-    await session.send("Print 'hello from claudemux' and stop.");
-    const finalState = await session.wait();
-    process.stdout.write(`final state: ${finalState}\n`);
+    const cursor = await session.send("Print 'hello from claudemux' and stop.");
+    // wait() blocks until a terminal outcome; the library imposes no deadline.
+    // Supply your own patience to cap it — wait({ maxMs }) and/or wait({ idleMs }).
+    const outcome = await session.wait(); // → a TurnOutcome you branch on
+    process.stdout.write(`outcome: ${outcome.kind}\n`); // "completed"
 
-    const text = await session.capture({ lines: 20 });
-    process.stdout.write("--- pane tail ---\n");
-    process.stdout.write(text);
-    process.stdout.write("--- end ---\n");
+    if (outcome.kind === "completed") {
+      const msgs = await session.messagesSince(cursor); // reply is readable on completed
+      const reply = msgs.flatMap((m) => m.parts.map((p) => ("text" in p ? p.text : ""))).join(" ");
+      process.stdout.write(`--- reply ---\n${reply}\n--- end ---\n`);
+    }
 
     await session.kill();
   } catch (err) {
