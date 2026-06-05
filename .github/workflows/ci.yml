@@ -68,8 +68,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libevent-dev libncurses-dev bison pkg-config
 
-      - name: Install tmux build deps (macOS)
-        if: runner.os == 'macOS' && steps.cache-tmux.outputs.cache-hit != 'true'
+      # Runtime libs (libevent, ncurses) must be present on EVERY macOS run, not
+      # just cache-miss: the cached tmux binary links them dynamically from
+      # Homebrew, so a cache-HIT (build skipped) was leaving `tmux -V` aborting
+      # with "Library not loaded: …/libevent_core….dylib". brew is a fast no-op
+      # when a formula is already installed. (utf8proc is --disable'd at configure
+      # time, so it's intentionally not installed here.)
+      - name: Install tmux deps (macOS)
+        if: runner.os == 'macOS'
         run: brew install libevent ncurses bison pkg-config automake autoconf
 
       - name: Build tmux ${{ matrix.tmux }} from source
