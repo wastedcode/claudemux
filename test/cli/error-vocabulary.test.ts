@@ -21,6 +21,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
 const binPath = join(repoRoot, "bin", "claudemux");
 
+// The concurrent-spawn-race block below boots TWO real claude processes; it's
+// out of the hermetic gate (no `claude` in `npm test`/CI). Run it deliberately
+// with CLAUDEMUX_LIVE_BOOT=1. The "no tmux leakage on missing-session" block
+// above it is hermetic (no boot) and always runs.
+const LIVE_BOOT = process.env.CLAUDEMUX_LIVE_BOOT === "1";
+
 interface CliResult {
   exit: number;
   stdout: string;
@@ -90,60 +96,63 @@ describe("CLI error messages — no `tmux` leakage on common error paths", () =>
   });
 });
 
-describe("CLI error messages — concurrent spawn race (QA P1-R2)", () => {
-  it("two concurrent spawns of the same name: neither stderr leaks 'tmux', loser gets SessionExists", async () => {
-    // The shared default socket (ADR 0006) makes concurrent same-name
-    // spawns routine. The TOCTOU window between create()'s exists-check
-    // and backend.spawn() means tmux — not the substrate — sometimes
-    // discovers the collision and emits `duplicate session: …`. That must
-    // surface as SessionExists, clean of any 'tmux' vocabulary.
-    //
-    // Both processes boot real claude in a fresh sandbox HOME, so each
-    // will EITHER lose the spawn race (SessionExists) OR win the spawn and
-    // then hit LoginRequired at boot (claude isn't authenticated). Both are
-    // clean typed errors. The invariant under test: NEITHER stderr contains
-    // 'tmux', and at least one carries "session already exists".
-    const path = `${claudeBinDir()}:${h.env.PATH}`;
-    const run = () =>
-      new Promise<CliResult>((resolve, reject) => {
-        const env = { ...h.env, CLAUDEMUX_SOCKET: testSocket, PATH: path };
-        const child = spawn(
-          binPath,
-          ["spawn", "race", "--cwd", h.sandbox.home, "--boot-timeout-ms", "3000"],
-          { env, stdio: ["ignore", "pipe", "pipe"] },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout.on("data", (b) => {
-          stdout += b.toString();
+describe.skipIf(!LIVE_BOOT)(
+  "CLI error messages — concurrent spawn race (QA P1-R2) (CLAUDEMUX_LIVE_BOOT=1)",
+  () => {
+    it("two concurrent spawns of the same name: neither stderr leaks 'tmux', loser gets SessionExists", async () => {
+      // The shared default socket (ADR 0006) makes concurrent same-name
+      // spawns routine. The TOCTOU window between create()'s exists-check
+      // and backend.spawn() means tmux — not the substrate — sometimes
+      // discovers the collision and emits `duplicate session: …`. That must
+      // surface as SessionExists, clean of any 'tmux' vocabulary.
+      //
+      // Both processes boot real claude in a fresh sandbox HOME, so each
+      // will EITHER lose the spawn race (SessionExists) OR win the spawn and
+      // then hit LoginRequired at boot (claude isn't authenticated). Both are
+      // clean typed errors. The invariant under test: NEITHER stderr contains
+      // 'tmux', and at least one carries "session already exists".
+      const path = `${claudeBinDir()}:${h.env.PATH}`;
+      const run = () =>
+        new Promise<CliResult>((resolve, reject) => {
+          const env = { ...h.env, CLAUDEMUX_SOCKET: testSocket, PATH: path };
+          const child = spawn(
+            binPath,
+            ["spawn", "race", "--cwd", h.sandbox.home, "--boot-timeout-ms", "3000"],
+            { env, stdio: ["ignore", "pipe", "pipe"] },
+          );
+          let stdout = "";
+          let stderr = "";
+          child.stdout.on("data", (b) => {
+            stdout += b.toString();
+          });
+          child.stderr.on("data", (b) => {
+            stderr += b.toString();
+          });
+          child.on("close", (code) => resolve({ exit: code ?? -1, stdout, stderr }));
+          child.on("error", reject);
         });
-        child.stderr.on("data", (b) => {
-          stderr += b.toString();
-        });
-        child.on("close", (code) => resolve({ exit: code ?? -1, stdout, stderr }));
-        child.on("error", reject);
-      });
 
-    const [a, b] = await Promise.all([run(), run()]);
+      const [a, b] = await Promise.all([run(), run()]);
 
-    // Core invariant: no 'tmux' vocabulary leaks from either process.
-    expect(a.stderr.toLowerCase(), `process A stderr leaked tmux:\n${a.stderr}`).not.toContain(
-      "tmux",
-    );
-    expect(b.stderr.toLowerCase(), `process B stderr leaked tmux:\n${b.stderr}`).not.toContain(
-      "tmux",
-    );
+      // Core invariant: no 'tmux' vocabulary leaks from either process.
+      expect(a.stderr.toLowerCase(), `process A stderr leaked tmux:\n${a.stderr}`).not.toContain(
+        "tmux",
+      );
+      expect(b.stderr.toLowerCase(), `process B stderr leaked tmux:\n${b.stderr}`).not.toContain(
+        "tmux",
+      );
 
-    // Both failed (one on the race, one on LoginRequired — or both on the
-    // race if neither got far enough to boot). Both exit non-zero.
-    expect(a.exit).not.toBe(0);
-    expect(b.exit).not.toBe(0);
+      // Both failed (one on the race, one on LoginRequired — or both on the
+      // race if neither got far enough to boot). Both exit non-zero.
+      expect(a.exit).not.toBe(0);
+      expect(b.exit).not.toBe(0);
 
-    // At least one process should have hit the duplicate-session race and
-    // surfaced SessionExists. (If the race resolved at the exists-check it
-    // also says "session already exists"; if it resolved at tmux level the
-    // duplicate-session classifier produces the same message.)
-    const combined = `${a.stderr}\n${b.stderr}`;
-    expect(combined).toContain("session already exists");
-  }, 30_000);
-});
+      // At least one process should have hit the duplicate-session race and
+      // surfaced SessionExists. (If the race resolved at the exists-check it
+      // also says "session already exists"; if it resolved at tmux level the
+      // duplicate-session classifier produces the same message.)
+      const combined = `${a.stderr}\n${b.stderr}`;
+      expect(combined).toContain("session already exists");
+    }, 30_000);
+  },
+);
