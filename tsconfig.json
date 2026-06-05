@@ -24,7 +24,7 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "claudemux": ["./src/index.ts"]
+      "@wastedcode/claudemux": ["./src/index.ts"]
     }
   },
   "include": ["src/**/*", "test/**/*", "examples/**/*", "bin/**/*"],
