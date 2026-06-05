@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { ask } from "./compose.js";
+import { ask, recover } from "./compose.js";
+import { SessionExists, SessionGone } from "./errors.js";
+import { adopt } from "./session/adopt.js";
+import { resume } from "./session/resume.js";
 import type { Message, SessionHandle, TurnOutcome } from "./types.js";
+
+vi.mock("./session/adopt.js", () => ({ adopt: vi.fn() }));
+vi.mock("./session/resume.js", () => ({ resume: vi.fn() }));
+const mockAdopt = vi.mocked(adopt);
+const mockResume = vi.mocked(resume);
 
 /** A SessionHandle stub recording call ORDER — ask must send → wait → read. */
 function stubHandle(
@@ -48,5 +56,35 @@ describe("ask — the Q&A round-trip composer", () => {
     const { handle } = stubHandle({ kind: "budget-exceeded", reason: "max" }, []);
     await ask(handle, "slow", { timeoutMs: 1234 });
     expect(handle.wait).toHaveBeenCalledWith({ timeoutMs: 1234 });
+  });
+});
+
+describe("recover — the reconnect compound (adopt-or-resume, report which)", () => {
+  const opts = { name: "job", cwd: "/tmp/x", agentSessionId: "id-1" };
+  const fakeHandle = (n: string) => ({ name: n }) as unknown as SessionHandle;
+
+  it("pane ALIVE → adopt succeeds → status 'attached', resume NOT called", async () => {
+    const live = fakeHandle("live");
+    mockAdopt.mockReset().mockResolvedValue(live);
+    mockResume.mockReset();
+    const r = await recover(opts);
+    expect(r.status).toBe("attached");
+    expect(r.session).toBe(live); // the adopted handle, untouched
+    expect(mockResume).not.toHaveBeenCalled();
+  });
+
+  it("pane GONE (adopt throws SessionGone) → resume → status 'resumed'", async () => {
+    mockAdopt.mockReset().mockRejectedValue(new SessionGone("job"));
+    mockResume.mockReset().mockResolvedValue(fakeHandle("fresh"));
+    const r = await recover(opts);
+    expect(r.status).toBe("resumed");
+    expect(mockResume).toHaveBeenCalledWith(opts); // the full resume opts threaded through
+  });
+
+  it("a NON-crash adopt error propagates — resume is NOT a catch-all", async () => {
+    mockAdopt.mockReset().mockRejectedValue(new SessionExists("job"));
+    mockResume.mockReset();
+    await expect(recover(opts)).rejects.toBeInstanceOf(SessionExists);
+    expect(mockResume).not.toHaveBeenCalled();
   });
 });

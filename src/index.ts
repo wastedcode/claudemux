@@ -28,8 +28,8 @@ export {
   WorkspaceUntrusted,
 } from "./errors.js";
 
-export { ask } from "./compose.js";
-export type { AskResult } from "./compose.js";
+export { ask, recover } from "./compose.js";
+export type { AskResult, RecoverResult, RecoverStatus } from "./compose.js";
 export { DELIVERED_QUEUED, DELIVERY_UNCONFIRMED } from "./session/handle.js";
 export { adopt } from "./session/adopt.js";
 export type { AdoptOptions } from "./session/adopt.js";

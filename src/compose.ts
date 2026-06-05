@@ -1,3 +1,6 @@
+import { SessionGone } from "./errors.js";
+import { adopt } from "./session/adopt.js";
+import { type ResumeOptions, resume } from "./session/resume.js";
 import type { Cursor, Message, ReadyOpts, SessionHandle, TurnOutcome } from "./types.js";
 
 /**
@@ -52,4 +55,57 @@ export async function ask(
   const outcome = await session.wait(opts);
   const messages = await session.messagesSince(cursor);
   return { outcome, messages, cursor };
+}
+
+/**
+ * How a session was reconnected on daemon boot — see {@link recover}.
+ *   - `"attached"` — the pane was **still alive** (your process restarted, the
+ *     session didn't); reconnected, nothing lost.
+ *   - `"resumed"` — the pane was **gone** (it crashed, or the box lost its tmux
+ *     server); the conversation was continued in a **fresh** pane. A turn may
+ *     have been in flight when it died — check `turnComplete(yourLastCursor)`.
+ */
+export type RecoverStatus = "attached" | "resumed";
+
+/** What {@link recover} returns: the live handle + how it was recovered. */
+export interface RecoverResult {
+  readonly session: SessionHandle;
+  readonly status: RecoverStatus;
+}
+
+/**
+ * Reconnect to a session on boot — the **reconnect compound**, one decision
+ * (attach the live pane vs resume the dead one) composed from two atomic
+ * sub-owners ({@link adopt} and {@link resume}). It owns no policy beyond that:
+ * the re-send decision stays the consumer's (via `turnComplete`). A daemon calls
+ * THIS for each `{ name, agentSessionId }` it persisted, instead of hand-rolling
+ * a `try`/catch-`SessionGone`/resume dance — and the returned {@link RecoverStatus}
+ * makes "did it crash?" a field, not control flow you write yourself. Only
+ * `SessionGone` from `adopt` (uniform across both crash modes) triggers the
+ * resume fallback; any other adopt error propagates — those are caller mistakes,
+ * not crashes.
+ *
+ * @example
+ * ```ts
+ * // daemon boot, per persisted { name, agentSessionId, cwd, lastCursor, lastPrompt }:
+ * const { session, status } = await recover({ name, agentSessionId, cwd });
+ * if (status === "resumed" && !(await session.turnComplete(lastCursor)))
+ *   await session.send(lastPrompt);   // it crashed mid-turn — re-send the one lost turn
+ * // status === "attached" ⇒ the session never went down; just keep going.
+ * ```
+ */
+export async function recover(opts: ResumeOptions): Promise<RecoverResult> {
+  try {
+    const session = await adopt({
+      name: opts.name,
+      ...(opts.namespace === undefined ? {} : { namespace: opts.namespace }),
+      ...(opts.agent === undefined ? {} : { agent: opts.agent }),
+      ...(opts.backend === undefined ? {} : { backend: opts.backend }),
+    });
+    return { session, status: "attached" };
+  } catch (e) {
+    if (!(e instanceof SessionGone)) throw e; // a real adopt error, not a crash
+    const session = await resume(opts);
+    return { session, status: "resumed" };
+  }
 }

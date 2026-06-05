@@ -11,7 +11,7 @@
  */
 import { execSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { adopt, create, exists, kill, list, resume } from "../dist/index.js";
+import { adopt, create, exists, kill, list, recover, resume } from "../dist/index.js";
 
 const SOCK = process.env.CLAUDEMUX_SOCKET ?? "cmux-flows";
 const CWD = "/tmp/cmux-flows";
@@ -164,6 +164,36 @@ async function f22() {
   }
 }
 
+// recover() — the reconnect compound: one verb does adopt-or-resume and reports
+// which, so a daemon doesn't hand-roll the try/catch dance.
+async function frecover() {
+  const a = `rec-${Date.now().toString(36)}`;
+  const s = await create(opts(a));
+  const id = s.agentSessionId;
+  await s.send("Remember the word: PLUM. Reply OK.");
+  await s.wait();
+  // (1) pane ALIVE → recover attaches.
+  const r1 = await recover({ ...opts(a), agentSessionId: id });
+  rec("REC", "recover() on a live session → status 'attached'", r1.status === "attached", r1.status);
+  // Crash A's pane (close the session).
+  const names = execSync(`tmux -L ${SOCK} -f /dev/null list-sessions -F '#{session_name}'`)
+    .toString()
+    .split("\n");
+  execSync(`tmux -L ${SOCK} -f /dev/null kill-session -t ${names.find((n) => n.includes(a))}`);
+  await sleep(500);
+  // (2) pane GONE → recover resumes the SAME conversation in a fresh pane.
+  const r2 = await recover({ ...opts(a), agentSessionId: id });
+  rec("REC", "recover() on a crashed session → status 'resumed'", r2.status === "resumed", r2.status);
+  const c = await r2.session.send("What was the word? One word.");
+  await r2.session.wait();
+  rec(
+    "REC",
+    "recovered session recalls history (PLUM)",
+    txt(await r2.session.messagesSince(c)).includes("PLUM"),
+  );
+  await r2.session.kill();
+}
+
 // F21 — consumer restart, pane SURVIVED: adopt recovers id + transcript.
 async function f21() {
   const a = `f21-${Date.now().toString(36)}`;
@@ -220,6 +250,7 @@ for (const [name, fn] of [
   ["F19", f19],
   ["F20", f20],
   ["F22", f22],
+  ["REC", frecover],
   ["F21", f21],
   ["F28", f28],
   ["F30", f30],
