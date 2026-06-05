@@ -208,7 +208,7 @@ export class TranscriptUnlocatable extends ClaudemuxError {
 
 /**
  * Thrown when the backend cannot find the named session — it has been reaped
- * (a crash, a `kill`, or the box lost its tmux server). The canonical "this
+ * (a crash, a `kill`, or the box lost its backend server). The canonical "this
  * session is gone" for **every** per-session op (read or write); `kill()` never
  * throws it (killing a gone session is success).
  */
