@@ -1,6 +1,9 @@
 {
   "name": "@wastedcode/claudemux",
   "version": "0.2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Drive long-lived Claude Code sessions from Node without writing tmux glue. await session.wait() actually returns when the agent is done.",
   "license": "MIT",
   "repository": {
