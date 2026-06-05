@@ -59,6 +59,7 @@ The full verb set:
 | `messages <name> <cursor>` | Print the messages produced since `<cursor>` (from `send`/`ask`) as JSON |
 | `turn-complete <name> <cursor>` | `true`/`false` (exit 0/1): did the turn at `<cursor>` produce a reply? (the re-send signal) |
 | `interrupt <name>` | Fire ESC to stop a working agent (harmless when idle — clears the input box) |
+| `respond <name> <choice>` | Answer a permission prompt: `choice` = `approve` \| `approve-for-session` \| `deny` |
 | `state <name>` | Print the current fused state (no blocking) |
 | `capture <name>` | Print the pane text; `--ansi` keeps escape codes |
 | `kill <name>` | Kill exactly that session (idempotent) |
@@ -92,7 +93,7 @@ await session.kill();
 
 ```ts
 const cursor = await session.send("…");
-const outcome = await session.wait({ timeoutMs: 60_000 });
+const outcome = await session.wait({ maxMs: 60_000 });
 switch (outcome.kind) {
   case "completed":        break;                       // reply is readable (flush-skew closed)
   case "awaiting":         outcome.on; /* "permission-prompt" | "dialog" */ break;

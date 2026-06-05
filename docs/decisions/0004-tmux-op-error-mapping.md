@@ -1,7 +1,17 @@
 # 0004. tmux operation error mapping (TmuxOpError)
 
-**Status:** accepted
+**Status:** superseded (2026-06-05 — the mapping was canonicalized; see CHANGELOG 0.2.0 and ADR 0005/0007)
 **Date:** 2026-05-28
+
+> **Superseded — the three-way `TmuxOpError` union described below no longer
+> exists.** There is no `TmuxOpError` type, no `PaneDead` (the pane is reaped,
+> ADR 0007), and the unreachable class is `BackendUnreachable`, not
+> `TmuxUnreachable`. Current model: a **single** classifier (`runForSession` in
+> `src/backends/tmux/exec.ts`) maps every per-session failure — read or write —
+> to the canonical `SessionGone`; `BackendUnreachable` is reserved for genuine
+> backend faults (`spawn-failed` / `timeout` / registry-layer `no-server`). The
+> `send-keys`-returns-0-on-a-dead-pane finding below still holds (it's why
+> `keys.ts` keeps a `has-session` pre-check). Retained as history.
 
 ## Context
 

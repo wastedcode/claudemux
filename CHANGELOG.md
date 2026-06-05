@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-06-05
 
 ### Changed
 
@@ -23,8 +23,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps a 300s wall-clock default of its own and gains `--idle-ms`, so shell use
   is unaffected. Surfaced by the drift-from-vision audit (the library was owning
   patience it shouldn't).
+- **Canonical per-session error: `SessionGone` for every read *and* write.** A
+  session that has been reaped (crash / `kill` / backend server down) now raises
+  the **same** typed error from every per-session op — `send`, `state`, `wait`,
+  `capture`, `messagesSince`, `turnComplete`, `adopt` — via a single classifier
+  (`runForSession`). Previously a crash could surface as `SessionGone` on a write
+  but `BackendUnreachable` on a read (the read/write drift). `BackendUnreachable`
+  is now reserved for genuine backend faults (`spawn-failed` / `timeout` /
+  `no-server` at the registry layer). `kill()` still never throws it (killing a
+  gone session is success). **Behavior change** for code that branched on the old
+  split — catch `SessionGone` uniformly.
 
 ### Added
+
+- **`recover()` — the reconnect compound.** One call for daemon boot: tries
+  `adopt()` (the pane is still alive → your process restarted, not the session);
+  on `SessionGone` (the pane crashed) falls back to `resume()` in a fresh pane.
+  Returns `{ session, status }` where `status` is `"attached"` or `"resumed"` —
+  so "did it crash?" is a field, not a `try/catch` you hand-roll. The re-send
+  decision stays yours (`turnComplete(lastCursor)`). New public types
+  `RecoverResult` / `RecoverStatus`. **Additive / non-breaking.** See README
+  §"Resume vs adopt vs recover".
+- **`TranscriptUnlocatable`** — a new typed error from `messagesSince` /
+  `turnComplete` when the transcript cannot be located (no recoverable
+  `agentSessionId` and no hook-reported path). Reads are **blind, not empty** —
+  so the substrate says so loudly rather than returning `[]` and looking like "no
+  messages." Guard with `agentSessionId !== undefined`, or persist the id. Mainly
+  hit by no-id sessions (`--fork-session`, adopt-with-cache-miss).
 
 - **`progress().agentChannelHealthy` — a Claude-drift canary.** New boolean on
   `Progress` (and the fused belief). `false` when EVERY observe channel comes up
@@ -96,6 +121,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The fused belief now cross-checks the pane: when the hooks say `working` but the
   pane has settled to a clean idle box (which a genuinely in-flight tool never
   renders), the turn has ended. (Surfaced by the permission-prompt deny path.)
+
+### Removed
+
+- **`PaneDead` error class** — provably unreachable and now deleted. The backend
+  runs `remain-on-exit off`, so a dead pane is **reaped**, not left as a husk: the
+  next per-session op sees an absent session and raises `SessionGone` (see the
+  canonicalization above). ADR 0007 (pane-dead detection + signal representation)
+  is superseded. **Breaking** for any `catch (e) { if (e instanceof PaneDead) … }`
+  — switch to `SessionGone`.
+- **`degraded` `TurnOutcome` member** — the substrate never emitted it; the union
+  is now `completed | awaiting | aborted | budget-exceeded`. Removed so the type
+  tells the truth. **Breaking** only for a `switch` that named the dead arm.
+- **`ClientInfo`** and several internal-only exports (`resetDefaultBackendForTesting`,
+  `SERVER_OPTION_COMMANDS`, `SpawnIdentity`) — dead surface, never part of the
+  intended public API.
+
+### Internal
+
+- **CI is now hermetic** — `npm test` spawns no real claude (real tmux only).
+  All real-claude tests are gated out of the gate: pre-auth boot behind
+  `CLAUDEMUX_LIVE_BOOT=1`, post-auth behind `*.live.test.ts` + `CLAUDEMUX_LIVE_*`.
+  Real-claude exercise lives in `scripts/*.mjs` acceptance suites. Not
+  consumer-facing.
 
 ## [0.1.0] - 2026-06-02
 
@@ -204,6 +252,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows-native is not supported. tmux is Unix-only; WSL is
   community-contributable, undocumented by the maintainers.
 
-[Unreleased]: https://github.com/wastedcode/claudemux/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/wastedcode/claudemux/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wastedcode/claudemux/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/wastedcode/claudemux/releases/tag/v0.0.1

@@ -359,6 +359,16 @@ flood of duplicates, or it re-acts on old turns. *Standardize:* a failed anchor
 should return a sentinel the consumer can DETECT (DeliveryUnconfirmed, S3), not a
 cursor that silently means "everything."
 
+> **Partially closed (2026-06-05).** The *write* side is fixed: `send` never
+> returns `"0"` anymore — it returns the detectable `DELIVERY_UNCONFIRMED` /
+> `DELIVERED_QUEUED` sentinels. But the *read* side still honors a numeric
+> cursor: `messagesSince` (handle.ts ~242) parses `"0"` → `all.slice(0)` = the
+> whole transcript. No current code path feeds it `"0"`, so it's defanged in
+> practice, but `messagesSince("0")` remains a positional back-door (it's the
+> only way to read full history — see the open "retrieve historical cursors"
+> question). Decide: either reject bare-numeric cursors on the read side too, or
+> promote a first-class "read all / list turns" affordance and document it.
+
 **F41 — `anchorOwnTurn` anchors the WRONG turn on duplicate prompts. ✅ (already correct)**
 *Hidden:* the cursor is found by matching the first 80 chars of the sent text
 against user records. Two build agents with identical kickoffs, a retry of the

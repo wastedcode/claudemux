@@ -34,8 +34,9 @@ attach mechanism; the consumer decides write-serialization and trust policy.
 2. **`adopt()` is a pure attach.** It does not spawn, boot, dismiss dialogs, assert REPL-readiness,
    or take an auto-`wait` flag. It returns a handle to the pane as-is.
 3. **The post-adopt protocol carries the safety:** *after a successful `adopt()`, the consumer MUST
-   call `state()` before driving the pane.* `state()` classifies dialog / wedged / `PaneDead`, which
-   is what lets the consumer recover correctly (the A/B/C recovery taxonomy in README §adopt).
+   call `state()` before driving the pane.* `state()` classifies dialog / wedged; a reaped pane
+   surfaces as `SessionGone` on the next op (not a state), which lets the consumer recover correctly
+   (the A/B recovery taxonomy in README §adopt).
 
 ## Consequences
 
