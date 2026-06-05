@@ -5,7 +5,7 @@
 
 ## 1. TL;DR
 
-You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or several), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
+You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or a whole fleet), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
 
 ```ts
 import { create } from "claudemux";
@@ -16,7 +16,27 @@ await session.wait(); // blocks until the turn ends; pass { maxMs } / { idleMs }
 const text = await session.capture();
 ```
 
-`create()` boots the agent, dismisses the first-run dialogs, and returns when the REPL is genuinely ready — not after a `sleep`. `wait()` blocks until the turn reaches a terminal **`TurnOutcome`** — `completed` (and the reply is readable), `awaiting` a decision, `aborted`, or out of your patience budget — fused from the agent's hooks + transcript, not screen-scraping. For the whole round-trip in one call there's `ask()` (send → wait → read); to continue a conversation after a crash there's `resume()`. The example above is the whole substrate.
+`create()` boots the agent, dismisses the first-run dialogs, and returns when the REPL is genuinely ready — not after a `sleep`. `wait()` blocks until the turn reaches a terminal **`TurnOutcome`** — `completed` (and the reply is readable), `awaiting` a decision, `aborted`, or out of your patience budget — fused from the agent's hooks + transcript, not screen-scraping. For the whole round-trip in one call there's `ask()` (send → wait → read); to continue a conversation after a crash there's `resume()`.
+
+That's one session. The name is the other half — drive a **fleet**, each session addressed by `name`, from one process:
+
+```ts
+import { create, ask } from "claudemux";
+
+// Boot three at once — each is its own real claude session.
+const fleet = await Promise.all(
+  ["api", "ui", "docs"].map((name) => create({ name, cwd: `./services/${name}` })),
+);
+
+// Fan a task across them; collect each as it actually finishes.
+const summaries = await Promise.all(
+  fleet.map((s) => ask(s, "Summarize what changed in this service this week")),
+);
+```
+
+`list()` enumerates the fleet; another process can `adopt` any session by name (the daemon-spawns / workers-drive split). One reliable session is just the smallest fleet.
+
+And it's a **real** session, not a headless pipe: each runs in a tmux session you can `tmux attach` into to watch the agent work — or take the keyboard yourself (one writer at a time, §4). The programmatic handle and the live session you can sit down at are the *same* session.
 
 **What this is for:** driving the *consumer-login* `claude` CLI (the one you set up with `claude login`) on a box you control — one session, or many coordinating, the way an orchestrator might run several claude sessions that talk to each other. It inherits your box's claude config (auth, permission mode, model, MCP) and passes claude's own flags through; it owns no configuration of its own (one exception: workspace trust, §4).
 
@@ -103,6 +123,29 @@ switch (outcome.kind) {
 ```
 
 `completed` guarantees the reply is readable — a following `messagesSince(cursor)` is race-free. **`budget-exceeded` does NOT mean failed** — your patience ran out, but the turn **may still be running**, so do **not** blindly re-send (a re-send into a live turn queues or duplicates *side effects* — the worst failure). Instead poll `progress()`: `toolInFlight === true` or a freshly-advancing `transcriptCount` means *slow-but-alive* (keep waiting); a long flat `transcriptCount` with `state` not `working` means likely wedged (then `interrupt()`, don't re-send). Re-send only a turn you've confirmed never landed — `turnComplete(cursor) === false`.
+
+### Coordinating a fleet
+
+The reason for the name. Sessions are independent and addressed by `name`, so you boot many, drive each by name, and enumerate them with `list()` — keep the handles `create()` hands back:
+
+```ts
+import { create, list, kill } from "claudemux";
+
+const names = ["api", "ui", "docs"];
+const fleet = Object.fromEntries(
+  await Promise.all(
+    names.map(async (name) => [name, await create({ name, cwd: `./services/${name}` })]),
+  ),
+);
+
+await fleet.api.send("Run the tests and summarize failures");
+await fleet.ui.send("Bump the design-token version");
+
+await list();                                   // ['api', 'ui', 'docs'] — your fleet view
+for (const name of await list()) await kill({ name });
+```
+
+Names outlive your process: a daemon can `create` the fleet and separate workers can `adopt` any session by name and drive it (see [adopt](#re-adopting-a-live-session-after-a-restart-adopt)). Want fleets that can't see each other's `list()`? Give them different `namespace`s. Booting many at once is safe — no false-ready, no crosstalk — but throttling a *big* fleet on a busy box is your call, not the substrate's ([Boot concurrency is yours](#boot-concurrency-is-yours)).
 
 ### Reading a turn's output (`send` → `messagesSince` / `progress`)
 
