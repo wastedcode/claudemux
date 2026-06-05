@@ -8,7 +8,7 @@
 You have `claude` logged in on your machine and you want to drive it from code — spawn a session (or a whole fleet), send a task, **know when it's actually done**, read the result, coordinate them. Today that's `child_process.spawn('claude', …)` + ad-hoc ANSI regex + `sleep(5)`, times N sessions, plus glue to keep them from colliding: it hangs on the first-run trust dialog, silently stalls on prompts, and rots on every claude update. claudemux retires that layer once.
 
 ```ts
-import { create } from "claudemux";
+import { create } from "@wastedcode/claudemux";
 
 const session = await create({ name: "job", cwd: process.cwd() });
 await session.send("Add a CHANGELOG entry for the next release");
@@ -21,7 +21,7 @@ const text = await session.capture();
 That's one session. The name is the other half — drive a **fleet**, each session addressed by `name`, from one process:
 
 ```ts
-import { create, ask } from "claudemux";
+import { create, ask } from "@wastedcode/claudemux";
 
 // Boot three at once — each is its own real claude session.
 const fleet = await Promise.all(
@@ -45,7 +45,7 @@ And it's a **real** session, not a headless pipe: each runs in a tmux session yo
 ## 2. Install
 
 ```sh
-npm install claudemux
+npm install @wastedcode/claudemux
 ```
 
 Requires Node ≥20 and a working `claude` CLI on `PATH` (you've run `claude` interactively at least once so it's authenticated). MIT-licensed.
@@ -55,7 +55,7 @@ Requires Node ≥20 and a working `claude` CLI on `PATH` (you've run `claude` in
 The CLI and library map 1:1 — `claudemux send name "..."` is `send(name, "...")` on the library side. One vocabulary.
 
 ```sh
-$ npm i claudemux
+$ npm i @wastedcode/claudemux
 $ claudemux spawn my-job --cwd ./fresh-repo --trust-workspace
 {"agentSessionId":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}   # persist this for resume
 $ claudemux ask my-job "Add a CHANGELOG entry for the next release"
@@ -97,7 +97,7 @@ All `claudemux` invocations from the same user share one rendezvous socket (the 
 The library mirrors the CLI. The canonical 30-second example lives in [`examples/spawn-send-wait-capture.ts`](./examples/spawn-send-wait-capture.ts) and is the only canonical sample — README snippets reference it rather than duplicate it.
 
 ```ts
-import { ask, create, type SessionHandle } from "claudemux";
+import { ask, create, type SessionHandle } from "@wastedcode/claudemux";
 
 const session: SessionHandle = await create({ name: "job", cwd: process.cwd() });
 
@@ -129,7 +129,7 @@ switch (outcome.kind) {
 The reason for the name. Sessions are independent and addressed by `name`, so you boot many, drive each by name, and enumerate them with `list()` — keep the handles `create()` hands back:
 
 ```ts
-import { create, list, kill } from "claudemux";
+import { create, list, kill } from "@wastedcode/claudemux";
 
 const names = ["api", "ui", "docs"];
 const fleet = Object.fromEntries(
@@ -181,7 +181,7 @@ then degrades to the pane fallback and says so via `hookChannelHealthy: false`).
 Bare-name operations (no handle needed):
 
 ```ts
-import { exists, kill, list } from "claudemux";
+import { exists, kill, list } from "@wastedcode/claudemux";
 
 await exists({ name: "job" });        // boolean
 await list();                         // string[] of names in the default namespace
@@ -196,7 +196,7 @@ pane** — the recovery path when the box lost the tmux server mid-turn. Pass th
 `agentSessionId` you persisted:
 
 ```ts
-import { create, resume } from "claudemux";
+import { create, resume } from "@wastedcode/claudemux";
 
 const s = await create({ name: "job", cwd });
 const id = s.agentSessionId!;            // persist { name: "job", agentSessionId: id }
@@ -294,7 +294,7 @@ import {
   BackendUnreachable,    // the backend isn't installed / not running / timed out
   BackendError,          // the backend command failed (message scrubbed of its argv)
   WorkspaceUntrusted,    // cwd isn't trusted and trustWorkspace wasn't set (see below)
-} from "claudemux";
+} from "@wastedcode/claudemux";
 ```
 
 ### Workspace trust (fail-closed)
@@ -377,7 +377,7 @@ stored id — see [persist *two* things per session](#persist-two-things-per-ses
 `adopt()` is the mirror of `create()`. Where `create()` boots a new session, `adopt()` re-attaches to one that is **already live** but was started by another process — the recovery path for when your daemon (or any long-lived orchestrator) restarts while its agents keep running. It's a **pure attach**: no spawn, no boot, no dialog dismissal. If the session isn't there, it throws `SessionGone`.
 
 ```ts
-import { adopt, SessionGone } from "claudemux";
+import { adopt, SessionGone } from "@wastedcode/claudemux";
 
 const session = await adopt({ name: "job" });   // throws SessionGone if it's not there
 const where = await session.state();             // ← ALWAYS do this before you drive the pane
@@ -450,7 +450,7 @@ while (outcome.kind === "awaiting" && outcome.on === "permission-prompt") {
 
 ## 6. Architecture
 
-The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — the lifecycle (`create`/`resume`/`adopt`/`exists`/`kill`/`list`), the per-session verbs (`send`/`wait`/`messagesSince`/`turnComplete`/`state`/`progress`/`interrupt`/`respond`/`capture`), and the `ask` composer — has no concept of tmux. A future backend (node-pty, anything that satisfies the internal seam) slots in without rewriting `import { create } from "claudemux"`.
+The public API is **backend-neutral by design**. The current implementation drives sessions through `tmux` (covered in §7), but the surface — the lifecycle (`create`/`resume`/`adopt`/`exists`/`kill`/`list`), the per-session verbs (`send`/`wait`/`messagesSince`/`turnComplete`/`state`/`progress`/`interrupt`/`respond`/`capture`), and the `ask` composer — has no concept of tmux. A future backend (node-pty, anything that satisfies the internal seam) slots in without rewriting `import { create } from "@wastedcode/claudemux"`.
 
 **Read/write split.** The substrate *drives* via the write surface (tmux send-keys/paste) but *observes* via reliable channels: the agent's lifecycle **hooks** (injected at spawn → a per-session rendezvous file) + the on-disk **transcript**, with the pane as a marked fallback. Four small seams compose it:
 

@@ -1,16 +1,16 @@
 /**
  * The canonical 30-second example: spawn → send → wait → capture → kill.
  *
- * This file imports from the published package name (`claudemux`), not
+ * This file imports from the published package name (`@wastedcode/claudemux`), not
  * `../src/index.js` — so it runs the same way a consumer would after
- * `npm install claudemux`.
+ * `npm install @wastedcode/claudemux`.
  *
  * **Expected behavior in a fresh `~/.claude/`:** `create()` will throw
  * `LoginRequired` because claude isn't authenticated. That's the design
  * — run `claude` interactively once to sign in, then re-run this script.
  */
 
-import { LoginRequired, create } from "claudemux";
+import { LoginRequired, create } from "@wastedcode/claudemux";
 
 async function main(): Promise<void> {
   try {

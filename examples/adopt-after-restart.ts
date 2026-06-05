@@ -2,9 +2,9 @@
  * Re-adopt live sessions after a daemon/process restart — the full recovery
  * decision tree a long-lived orchestrator must write.
  *
- * This file imports from the published package name (`claudemux`), not
+ * This file imports from the published package name (`@wastedcode/claudemux`), not
  * `../src/index.js` — so it runs the same way a consumer would after
- * `npm install claudemux`.
+ * `npm install @wastedcode/claudemux`.
  *
  * **Illustrative, NOT a CI gate.** Like `spawn-send-wait-capture.ts`, this
  * cannot run green without auth: the State-A re-`create()` path throws
@@ -26,7 +26,7 @@ import {
   adopt,
   claude,
   resume,
-} from "claudemux";
+} from "@wastedcode/claudemux";
 
 /**
  * What the daemon persisted per session. You MUST persist BOTH:
