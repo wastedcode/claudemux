@@ -237,6 +237,46 @@ export function classifyTmuxFailure(
   return new BackendError(sessionName, argv, result.exit, result.stderr);
 }
 
+/** Is this the `no-server` {@link BackendUnreachable} (empty/down server)? */
+export function isNoServer(err: unknown): boolean {
+  return err instanceof BackendUnreachable && err.kind === "no-server";
+}
+
+/**
+ * Run a tmux op that targets ONE named session, applying the **canonical
+ * per-session failure mapping** — the single place reads and writes share so the
+ * same crash can't surface as two different errors again (the read/write drift).
+ *
+ * From a single session's vantage, a `no-server` failure means *this session is
+ * gone* → {@link SessionGone}, NOT a distinct backend fault. (Registry ops —
+ * `list`/`exists` — keep treating no-server as plain absence; `BackendUnreachable`
+ * is left to mean a *real* backend fault: `spawn-failed` / `timeout`.) The
+ * canonical answer holds whether no-server arrives as a rejection (the common
+ * path) or as a returned non-zero result.
+ *
+ * Returns the raw {@link TmuxResult} on success; throws the typed error otherwise.
+ */
+export async function runForSession(
+  exec: TmuxExec,
+  args: readonly string[],
+  label: string,
+  opts: { input?: string } = {},
+): Promise<TmuxResult> {
+  let r: TmuxResult;
+  try {
+    r = await exec.run([...args], { sessionName: label, ...opts });
+  } catch (err) {
+    if (isNoServer(err)) throw new SessionGone(label);
+    throw err; // spawn-failed / timeout / a real fault — surface as-is
+  }
+  const classified = classifyTmuxFailure(label, ["tmux", ...args], r);
+  if (classified !== null) {
+    if (isNoServer(classified)) throw new SessionGone(label);
+    throw classified;
+  }
+  return r;
+}
+
 /**
  * Detail surfaced when a `Pane is dead (…)` annotation is present.
  */

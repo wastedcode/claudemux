@@ -1,5 +1,5 @@
 import { PaneDead } from "../../errors.js";
-import { type TmuxExec, classifyTmuxFailure, detectPaneDeadAnnotation } from "./exec.js";
+import { type TmuxExec, detectPaneDeadAnnotation, runForSession } from "./exec.js";
 
 /**
  * Capture the named session's pane text.
@@ -28,12 +28,12 @@ export async function capturePane(
   if (opts.ansi === true) args.push("-e");
   args.push("-t", target);
 
-  const r = await exec.run(args, { sessionName: label });
-  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
-  if (err) throw err;
+  // Per-session read: a dead server means THIS session is gone (canonical
+  // SessionGone), matching the write path — not a divergent BackendUnreachable.
+  const r = await runForSession(exec, args, label);
 
   // Surface Case A pane-death loudly — Case B (session gone) is already
-  // surfaced by classifyTmuxFailure above. The annotation lands in stdout.
+  // surfaced by runForSession above. The annotation lands in stdout.
   const dead = detectPaneDeadAnnotation(r.stdout);
   if (dead !== null) {
     throw new PaneDead(label, dead.signal);

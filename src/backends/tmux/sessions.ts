@@ -1,6 +1,6 @@
-import { BackendUnreachable, SessionGone } from "../../errors.js";
+import { SessionGone } from "../../errors.js";
 import { PANE_HEIGHT } from "../../session/constants.js";
-import { type TmuxExec, classifyTmuxFailure, isSessionGoneStderr } from "./exec.js";
+import { type TmuxExec, classifyTmuxFailure, isNoServer, isSessionGoneStderr } from "./exec.js";
 import { serverOptionsArgv } from "./options.js";
 
 /**
@@ -164,14 +164,4 @@ export async function listSessions(exec: TmuxExec, namespace: string): Promise<s
     .map((line) => line.trim())
     .filter((line) => line.startsWith(prefix))
     .map((line) => line.slice(prefix.length));
-}
-
-/**
- * True only for the `no-server` flavor of `BackendUnreachable` — a
- * legitimately-empty/down server, which query/idempotent verbs treat as
- * "absence." `spawn-failed` (binary missing) and `timeout` (wedged) are
- * real faults that must propagate, so they are NOT swallowed here.
- */
-function isNoServer(err: unknown): boolean {
-  return err instanceof BackendUnreachable && err.kind === "no-server";
 }

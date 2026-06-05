@@ -1,6 +1,6 @@
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SessionRef } from "../backends/types.js";
-import { PromptResponseUnsupported } from "../errors.js";
+import { PromptResponseUnsupported, TranscriptUnlocatable } from "../errors.js";
 import { interruptOnce } from "../io/interrupt.js";
 import { respondOnce } from "../io/respond.js";
 import { sendOnce, submitOnce } from "../io/send.js";
@@ -153,9 +153,16 @@ export function makeHandle(deps: HandleDeps): SessionHandle {
         }
         return DELIVERY_UNCONFIRMED;
       }),
-    messagesSince: (cursor) => mutex.run(async () => messagesSince(observer, cursor)),
+    messagesSince: (cursor) =>
+      mutex.run(async () => {
+        if (!observer.transcriptLocatable()) throw new TranscriptUnlocatable(deps.name);
+        return messagesSince(observer, cursor);
+      }),
     turnComplete: (cursor) =>
-      mutex.run(async () => messagesSince(observer, cursor).some((m) => m.role === "assistant")),
+      mutex.run(async () => {
+        if (!observer.transcriptLocatable()) throw new TranscriptUnlocatable(deps.name);
+        return messagesSince(observer, cursor).some((m) => m.role === "assistant");
+      }),
     progress: () =>
       mutex.run(async () => {
         const { belief } = await readBelief(interruptPending);

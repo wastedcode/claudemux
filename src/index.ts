@@ -25,6 +25,7 @@ export {
   ReplTimeout,
   SessionExists,
   SessionGone,
+  TranscriptUnlocatable,
   WorkspaceUntrusted,
 } from "./errors.js";
 

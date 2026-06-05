@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { SessionGone } from "../../errors.js";
-import { type TmuxExec, classifyTmuxFailure } from "./exec.js";
+import { type TmuxExec, runForSession } from "./exec.js";
 import { hasSession } from "./sessions.js";
 
 /**
@@ -59,19 +59,8 @@ export async function pasteText(
   const normalized = sanitizePasteBody(text);
   const bufferName = `claudemux-${randomBytes(4).toString("hex")}`;
 
-  {
-    const args = ["load-buffer", "-b", bufferName, "-"];
-    const r = await exec.run(args, { sessionName: label, input: normalized });
-    const err = classifyTmuxFailure(label, ["tmux", ...args], r);
-    if (err) throw err;
-  }
-
-  {
-    const args = ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", target];
-    const r = await exec.run(args, { sessionName: label });
-    const err = classifyTmuxFailure(label, ["tmux", ...args], r);
-    if (err) throw err;
-  }
+  await runForSession(exec, ["load-buffer", "-b", bufferName, "-"], label, { input: normalized });
+  await runForSession(exec, ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", target], label);
 }
 
 export async function sendKey(
@@ -81,10 +70,7 @@ export async function sendKey(
   label: string = target,
 ): Promise<void> {
   await ensureLive(exec, target, label);
-  const args = ["send-keys", "-t", target, key];
-  const r = await exec.run(args, { sessionName: label });
-  const err = classifyTmuxFailure(label, ["tmux", ...args], r);
-  if (err) throw err;
+  await runForSession(exec, ["send-keys", "-t", target, key], label);
 }
 
 async function ensureLive(exec: TmuxExec, target: string, label: string): Promise<void> {

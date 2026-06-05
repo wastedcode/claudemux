@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claude } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
 import type { Backend, SendPayload } from "../backends/types.js";
-import { PromptResponseUnsupported } from "../errors.js";
+import { PromptResponseUnsupported, TranscriptUnlocatable } from "../errors.js";
 import { DELIVERED_QUEUED, DELIVERY_UNCONFIRMED, makeHandle } from "./handle.js";
 
 const ctx = claude.transcript;
@@ -145,6 +145,27 @@ describe("messagesSince — causal-chain isolation (the multi-turn cursor fix)",
       ].join("\n")}\n`,
     );
     expect(txt(await handle().messagesSince("u2"))).toBe("reply TWO"); // a1 still excluded
+  });
+
+  it("throws TranscriptUnlocatable for a NO-ID session (blind reads, not deceptive empty) (F46)", async () => {
+    // No agentSessionId AND no hook rendezvous → the transcript is unaddressable.
+    // messagesSince/turnComplete must throw, NOT return []/false (which in a
+    // re-send path would re-run a turn that actually completed).
+    const blind = makeHandle({
+      backend: noopBackend(),
+      agent: agent(),
+      namespace: "claudemux",
+      name: "t",
+      // intentionally NO agentSessionId
+    });
+    await expect(blind.messagesSince("u1")).rejects.toBeInstanceOf(TranscriptUnlocatable);
+    await expect(blind.turnComplete("u1")).rejects.toBeInstanceOf(TranscriptUnlocatable);
+
+    // A LOCATABLE session (id present) with a genuinely empty/unmatched cursor
+    // still returns the benign empty — only true unlocatability throws.
+    writeFileSync(tx, `${[userRec("u1", null, "ONE"), asstRec("a1", "u1", "reply")].join("\n")}\n`);
+    expect((await handle().messagesSince("nope")).length).toBe(0); // bad cursor → [], no throw
+    expect(await handle().turnComplete("u1")).toBe(true); // locatable → honest answer
   });
 
   it("turnComplete: true when a reply descends from the cursor, false for a DANGLING turn (S2/F20)", async () => {

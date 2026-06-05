@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BackendUnreachable, SessionExists, SessionGone } from "../../errors.js";
+import { BackendError, BackendUnreachable, SessionExists, SessionGone } from "../../errors.js";
 import {
+  type TmuxExec,
   type TmuxResult,
   classifyTmuxFailure,
   isDuplicateSessionStderr,
   isNoServerStderr,
   isSessionGoneStderr,
+  runForSession,
 } from "./exec.js";
 
 /**
@@ -63,6 +65,45 @@ describe("classifyTmuxFailure — routine shapes → typed errors", () => {
     expect(classifyTmuxFailure("ns/x", ARGV, mk("can't find window: ns--x"))).toBeInstanceOf(
       SessionGone,
     );
+  });
+});
+
+describe("runForSession — canonical per-session failure mapping (the read/write anti-drift)", () => {
+  // runForSession only calls `.run`; cast the minimal fake to the full type.
+  const exec = (run: TmuxExec["run"]): TmuxExec => ({ run }) as unknown as TmuxExec;
+  const noServer = () =>
+    new BackendUnreachable("ns/x", "no-server", new Error("no server running"));
+
+  it("no-server REJECTION → SessionGone (a per-session op on a dead server = this session is gone)", async () => {
+    const e = exec(() => Promise.reject(noServer()));
+    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(SessionGone);
+  });
+
+  it("no-server RETURNED result → SessionGone too (belt-and-braces)", async () => {
+    const e = exec(() =>
+      Promise.resolve({ exit: 1, stdout: "", stderr: "no server running on /tmp/s", durationMs: 1 }),
+    );
+    await expect(runForSession(e, ["capture-pane", "-p"], "ns/x")).rejects.toBeInstanceOf(SessionGone);
+  });
+
+  it("a REAL backend fault (spawn-failed) is NOT remapped — it stays BackendUnreachable", async () => {
+    const e = exec(() => Promise.reject(new BackendUnreachable("ns/x", "spawn-failed")));
+    await expect(runForSession(e, ["send-keys", "-t", "x", "1"], "ns/x")).rejects.toBeInstanceOf(
+      BackendUnreachable,
+    );
+  });
+
+  it("session-gone stderr → SessionGone; an unclassified failure → BackendError; success → the result", async () => {
+    const gone = exec(() =>
+      Promise.resolve({ exit: 1, stdout: "", stderr: "can't find session: ns--x", durationMs: 1 }),
+    );
+    await expect(runForSession(gone, ["capture-pane"], "ns/x")).rejects.toBeInstanceOf(SessionGone);
+    const weird = exec(() =>
+      Promise.resolve({ exit: 1, stdout: "", stderr: "no space left on device", durationMs: 1 }),
+    );
+    await expect(runForSession(weird, ["capture-pane"], "ns/x")).rejects.toBeInstanceOf(BackendError);
+    const ok = exec(() => Promise.resolve({ exit: 0, stdout: "PANE", stderr: "", durationMs: 1 }));
+    expect((await runForSession(ok, ["capture-pane"], "ns/x")).stdout).toBe("PANE");
   });
 });
 

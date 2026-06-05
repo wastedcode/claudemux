@@ -104,6 +104,21 @@ export class SessionObserver {
     });
   }
 
+  /**
+   * Is the transcript **addressable** — do we hold an `agentSessionId` to locate
+   * it by, or has a hook edge reported its path? This is addressability, NOT file
+   * existence: a fresh session with an id (transcript not flushed yet) is
+   * locatable and reads empty legitimately. `false` means we have NO handle on
+   * where the transcript lives (an adopt-miss, a non-claudemux session, or a fork
+   * before its first hook edge) — reads are blind, and the handle throws
+   * `TranscriptUnlocatable` rather than returning a deceptive empty.
+   */
+  transcriptLocatable(): boolean {
+    if (this.#agentSessionId !== undefined) return true;
+    this.#refreshEdges();
+    return this.#edges.some((e) => e.transcriptPath !== undefined);
+  }
+
   /** The accumulated messages + ancestry graph (for `messagesSince`/`turnComplete`). */
   thread(): { messages: readonly Message[]; parentOf: Map<string, string | undefined> } {
     this.#refreshEdges(); // so the hook transcript-path is preferred on a first read

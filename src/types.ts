@@ -249,16 +249,19 @@ export interface SessionHandle {
   /**
    * The messages produced since `cursor` (a value a prior {@link send}
    * returned), as neutral {@link Message}s read from the session transcript.
-   * **Empty** when the transcript can't be located (an adopted session with no
-   * recoverable {@link agentSessionId}) OR the cursor can't be resolved (the
-   * `DELIVERY_UNCONFIRMED` sentinel, a stale/garbage value) — an unresolvable
-   * cursor never returns the whole transcript.
    *
-   * **Empty is ambiguous on purpose — disambiguate with {@link agentSessionId}.**
-   * A perfectly good cursor can read `[]` simply because the transcript is
-   * unlocatable (no recoverable id), which looks identical to "no new messages."
-   * If that distinction matters, gate on `agentSessionId !== undefined` first:
-   * `undefined` ⇒ reads are blind (can't locate the transcript), not "nothing new."
+   * Returns **empty** for two *benign* reasons: there genuinely is nothing new
+   * after a resolvable cursor, or the cursor itself can't be resolved (the
+   * `DELIVERY_UNCONFIRMED`/`DELIVERED_QUEUED` sentinels, a stale/garbage value —
+   * an unresolvable cursor never returns the whole transcript).
+   *
+   * **Throws `TranscriptUnlocatable`** when the transcript can't be located at all
+   * — no recoverable {@link agentSessionId} and no hook-reported path (an
+   * {@link adopt} whose cache missed, a non-claudemux session, a fork before its
+   * first hook edge). That case is *blind reads*, not "nothing new"; conflating
+   * the two silently in a crash-recovery re-send path double-runs work, so it is a
+   * loud error rather than a deceptive `[]`. Gate on `agentSessionId !== undefined`
+   * (or catch the error) if you adopt sessions that may not be recoverable.
    */
   messagesSince(cursor: Cursor): Promise<Message[]>;
 
@@ -270,9 +273,11 @@ export interface SessionHandle {
    * `true`; an in-flight or never-delivered one is `false`. Avoids hand-rolling a
    * transcript scan to answer "what should I re-send?".
    *
-   * NB: like {@link messagesSince}, it needs a locatable transcript; an adopted
-   * session with no recoverable id reads `false` (can't see the reply) — pair
-   * with `agentSessionId !== undefined` if you must distinguish that.
+   * Like {@link messagesSince}, it **throws `TranscriptUnlocatable`** when the
+   * transcript can't be located at all (no recoverable id, no hook path) — so a
+   * blind read in the re-send path surfaces loudly instead of a deceptive `false`
+   * that would re-send a turn that actually completed. A locatable-but-replyless
+   * turn is the honest `false`.
    */
   turnComplete(cursor: Cursor): Promise<boolean>;
 

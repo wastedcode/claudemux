@@ -98,8 +98,10 @@ export class DialogStuck extends ClaudemuxError {
 }
 
 /**
- * Thrown by `wait()` or boot when the REPL did not reach an actionable
- * state (idle / permission-prompt / dialog) within the configured timeout.
+ * Thrown by **boot** ({@link create}/{@link resume}/{@link adopt}) when the REPL
+ * did not reach a stable ready state within `bootTimeoutMs`. NOT thrown by
+ * `wait()` — turn patience is the consumer's, so a turn that outlasts your budget
+ * is a returned `budget-exceeded` {@link TurnOutcome}, never an exception.
  */
 export class ReplTimeout extends ClaudemuxError {
   /** The timeout budget that elapsed, in milliseconds. */
@@ -178,6 +180,29 @@ export class PromptResponseUnsupported extends ClaudemuxError {
       sessionName,
     );
     this.agentName = agentName;
+  }
+}
+
+/**
+ * Thrown by {@link SessionHandle.messagesSince} / {@link SessionHandle.turnComplete}
+ * when the session's transcript **cannot be located at all** — there is no
+ * recoverable `agentSessionId` to locate it by AND no hook edge has reported its
+ * path (an {@link adopt} whose recovery cache missed, a non-claudemux session, or
+ * a fork before its first hook edge). Reads are *blind*, not "nothing new."
+ *
+ * This is a **loud** failure on purpose: an empty read silently conflated with
+ * "no reply yet" sits exactly in the crash-recovery re-send path, where the wrong
+ * answer double-runs work. Throwing forces the consumer to handle "I can't see
+ * this conversation" distinctly. A genuinely empty (but *locatable*) transcript,
+ * or an unresolvable cursor (a sentinel/garbage value), still returns empty —
+ * only true unlocatability throws.
+ */
+export class TranscriptUnlocatable extends ClaudemuxError {
+  constructor(sessionName: string) {
+    super(
+      "transcript cannot be located (no recoverable agentSessionId and no hook-reported path); reads are blind, not empty — persist the agentSessionId, or check `agentSessionId !== undefined` before reading",
+      sessionName,
+    );
   }
 }
 
