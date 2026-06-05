@@ -416,7 +416,7 @@ The public API is **backend-neutral by design**. The current implementation driv
 - **`Observer`** — the single owner of "what's true": fuses hook edges + transcript + a pre-classified pane into one belief. `state()`/`progress()` read it; `wait()` composes it with a patience budget into a `TurnOutcome`. No caller forms its own belief.
 - **`Classifier`** — pane text → state via per-agent rules; "dialog before idle" is enforced structurally.
 
-Layering is grep-enforced in CI: `src/backends/**` never imports from `src/agents/**` and vice versa, and no claude/transcript vocabulary leaks out of `src/agents/`. No tmux concepts appear in `src/index.ts`, public types, or `--help` output. The full consumer-journey contract (every happy/unhappy/recovery flow, with the standardized behavior) lives in [`docs/design/user-flows.md`](./docs/design/user-flows.md).
+Layering is grep-enforced in CI: `src/backends/**` never imports from `src/agents/**` and vice versa, and no claude/transcript vocabulary leaks out of `src/agents/`. No tmux concepts appear in `src/index.ts`, public types, or `--help` output.
 
 ## 7. Compatibility
 

@@ -1,6 +1,6 @@
 /**
- * RECOVERY-FLOW acceptance — the gnarly flows from docs/design/user-flows.md,
- * exercised FOR REAL against a live claude (it actually kills the tmux server
+ * RECOVERY-FLOW acceptance — the gnarly recovery flows, exercised FOR REAL
+ * against a live claude (it actually kills the tmux server
  * mid-turn, etc.) — not superficial return-type checks. Run (after `npm build`):
  *   CLAUDEMUX_SOCKET=cmux-flows node scripts/flows-recovery.mjs
  *
