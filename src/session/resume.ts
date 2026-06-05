@@ -1,13 +1,11 @@
-import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, SessionRef } from "../backends/types.js";
+import type { Backend } from "../backends/types.js";
 import { SessionExists } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { DEFAULT_NAMESPACE } from "./constants.js";
-import { sharedDefaultBackend } from "./default-backend.js";
 import { formatSessionLabel } from "./ref.js";
+import { resolveSessionContext } from "./resolve.js";
 import { spawnBootHandle } from "./spawn-boot.js";
-import { validateAgentSessionId, validateNamePart } from "./validate.js";
+import { validateAgentSessionId } from "./validate.js";
 
 /**
  * Options for {@link resume}. The peer of {@link CreateOptions} — same lifecycle
@@ -74,13 +72,8 @@ export interface ResumeOptions {
  * ```
  */
 export async function resume(opts: ResumeOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
-  validateNamePart("namespace", namespace);
-  validateNamePart("name", opts.name);
   validateAgentSessionId(opts.agentSessionId);
-  const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? sharedDefaultBackend();
-  const ref: SessionRef = { namespace, name: opts.name };
+  const { ref, agent, backend } = resolveSessionContext(opts);
 
   if (await backend.exists(ref)) {
     throw new SessionExists(formatSessionLabel(ref));

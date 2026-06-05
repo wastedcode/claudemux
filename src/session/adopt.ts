@@ -1,13 +1,11 @@
-import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, SessionRef } from "../backends/types.js";
+import type { Backend } from "../backends/types.js";
 import { SessionGone } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { AGENT_SESSION_ID_META_KEY, DEFAULT_NAMESPACE } from "./constants.js";
-import { sharedDefaultBackend } from "./default-backend.js";
+import { AGENT_SESSION_ID_META_KEY } from "./constants.js";
 import { attachHandle } from "./handle.js";
 import { formatSessionLabel } from "./ref.js";
-import { validateNamePart } from "./validate.js";
+import { resolveSessionContext } from "./resolve.js";
 
 /**
  * Options for {@link adopt}. Mirrors {@link CreateOptions} minus the spawn-only
@@ -58,12 +56,7 @@ export interface AdoptOptions {
  * ```
  */
 export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
-  validateNamePart("namespace", namespace);
-  validateNamePart("name", opts.name);
-  const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? sharedDefaultBackend();
-  const ref: SessionRef = { namespace, name: opts.name };
+  const { ref, agent, backend } = resolveSessionContext(opts);
 
   // Mirror of create()'s exists-check, inverted. adopt REQUIRES the session to
   // be present; absence (including whole-server-down, which exists() collapses
@@ -84,8 +77,8 @@ export async function adopt(opts: AdoptOptions): Promise<SessionHandle> {
   return attachHandle({
     backend,
     agent,
-    namespace,
-    name: opts.name,
+    namespace: ref.namespace,
+    name: ref.name,
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
   });
 }

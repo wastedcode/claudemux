@@ -1,13 +1,11 @@
-import { claude as defaultAgent } from "../agents/claude.js";
 import type { AgentDef } from "../agents/types.js";
-import type { Backend, SessionRef } from "../backends/types.js";
+import type { Backend } from "../backends/types.js";
 import { SessionExists } from "../errors.js";
 import type { SessionHandle } from "../types.js";
-import { DEFAULT_NAMESPACE } from "./constants.js";
-import { sharedDefaultBackend } from "./default-backend.js";
 import { formatSessionLabel } from "./ref.js";
+import { resolveSessionContext } from "./resolve.js";
 import { spawnBootHandle } from "./spawn-boot.js";
-import { validateAgentSessionId, validateNamePart } from "./validate.js";
+import { validateAgentSessionId } from "./validate.js";
 
 /**
  * Options for {@link create}. The substrate provides sensible defaults so
@@ -94,12 +92,7 @@ export interface CreateOptions {
  * ```
  */
 export async function create(opts: CreateOptions): Promise<SessionHandle> {
-  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
-  validateNamePart("namespace", namespace);
-  validateNamePart("name", opts.name);
-  const agent = opts.agent ?? defaultAgent;
-  const backend = opts.backend ?? sharedDefaultBackend();
-  const ref: SessionRef = { namespace, name: opts.name };
+  const { ref, agent, backend } = resolveSessionContext(opts);
 
   // Exists-check first. Never silently adopt an existing session — that is
   // the lifecycle-policy footgun claudemux explicitly avoids.
