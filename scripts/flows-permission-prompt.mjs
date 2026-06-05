@@ -35,6 +35,14 @@ const opts = (name) => ({
   cwd: CWD,
   trustWorkspace: true,
   bootTimeoutMs: 60_000,
+  // Force DEFAULT permission mode for THIS session, regardless of the box's
+  // global settings.json. Without this the suite is non-hermetic: a daemon/CI
+  // host configured `permissions.defaultMode: "bypassPermissions"` (the common
+  // unattended setup) never prompts, so every `awaiting{permission-prompt}`
+  // assertion fails — not because the substrate is wrong (it correctly reports
+  // `completed`, the tool having run un-gated) but because there is no gate to
+  // observe. `--permission-mode` (a CLI flag) overrides the ambient default.
+  extraArgs: ["--permission-mode", "default"],
 });
 
 async function approvePath() {
