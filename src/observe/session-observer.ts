@@ -96,9 +96,11 @@ export class SessionObserver {
   ): Belief {
     this.#refreshEdges();
     this.#refreshTranscript();
+    const lastMessage = this.#messages[this.#messages.length - 1];
     return believe({
       edges: this.#edges,
       transcriptCount: this.#messages.length,
+      ...(lastMessage === undefined ? {} : { lastMessageRole: lastMessage.role }),
       pane,
       weInterrupted,
     });

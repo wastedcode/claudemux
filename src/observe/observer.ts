@@ -93,6 +93,18 @@ export interface Belief extends Progress {
   readonly lastStopAt?: number;
   /** ms of the most recent lifecycle edge of any kind — a liveness heartbeat. */
   readonly lastActivityAt?: number;
+  /**
+   * Role of the NEWEST message record on disk (`undefined` when the transcript is
+   * empty/blind). `assistant` is the cross-process flush signal `wait()` gates
+   * `completed` on: a stable idle pane can precede the transcript flush of a large
+   * reply, so a SEPARATE process reading `messagesSince` right after `completed`
+   * would see `[]` (the only channel it shares is the on-disk file). The final
+   * reply is the last record, and {@link import('./incremental.js').TailReader}
+   * only surfaces a record once its terminating newline lands — so an `assistant`
+   * tail means the reply is fully on disk. A claude tool-result is `user`-role, so
+   * a tool turn correctly reads `user` until its FINAL answer flushes.
+   */
+  readonly lastMessageRole?: "user" | "assistant";
 }
 
 /**
@@ -132,6 +144,9 @@ export function believe(o: {
    * content. Optional: absent ⇒ treated as empty (no drift judgment).
    */
   pane: { state: State; interrupted: boolean; nonEmpty?: boolean };
+  /** Role of the newest transcript message — the cross-process flush signal `wait()`
+   * gates `completed` on (see {@link Belief.lastMessageRole}). Absent ⇒ blind. */
+  lastMessageRole?: "user" | "assistant";
   /**
    * Authoritative "this handle issued an interrupt not yet superseded by a send."
    * An interrupt fires NO `stop` edge AND leaves the spinner's `esc to interrupt`
@@ -185,6 +200,7 @@ export function believe(o: {
     agentChannelHealthy,
     ...(lastStop === undefined ? {} : { lastStopAt: lastStop.at }),
     ...(lastEdge === undefined ? {} : { lastActivityAt: lastEdge.at }),
+    ...(o.lastMessageRole === undefined ? {} : { lastMessageRole: o.lastMessageRole }),
   };
 }
 
