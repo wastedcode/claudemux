@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { ClaudemuxError } from "../errors.js";
 import { type AskCliOpts, askCli } from "./ask.js";
@@ -16,6 +17,8 @@ import { stateCli } from "./state.js";
 import { turnCompleteCli } from "./turn-complete.js";
 import { type WaitCliOpts, waitCli } from "./wait.js";
 
+const packageJson = createRequire(import.meta.url)("../../package.json") as { version: string };
+
 /**
  * Build the `claudemux` commander entry. Exported separately from `bin/`
  * so tests can drive it without spawning a subprocess.
@@ -26,7 +29,10 @@ import { type WaitCliOpts, waitCli } from "./wait.js";
  */
 export function buildProgram(): Command {
   const program = new Command();
-  program.name("claudemux").description("Drive long-lived Claude Code sessions from Node.");
+  program
+    .name("claudemux")
+    .description("Drive long-lived Claude Code sessions from Node.")
+    .version(packageJson.version);
 
   // Every verb locates a session: namespace prefix + an explicit socket override
   // (the latter for dev / debugging — most users share the default socket).
