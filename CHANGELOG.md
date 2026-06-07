@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-07
+
+### Fixed
+
+- **`completed` now guarantees the reply is on disk *across processes*.** A stable
+  idle pane can settle *before* the transcript flush of a large reply, so a
+  SEPARATE process calling `messages`/`messagesSince` right after a `wait` that
+  reported `completed` could read `[]` while `capture` showed the full reply — a
+  silent empty read for orchestrators that use the structured path instead of
+  screen-scraping. The README's "race-free after `completed`" guarantee held only
+  for a single in-process observer; the CLI `send`→`wait`→`messages` split crosses
+  three processes whose only shared channel is the on-disk transcript. `wait` now
+  holds `completed` until the reply record is actually on disk (the newest
+  transcript message is `assistant` — a claude tool-result is `user`-role, so a
+  tool turn waits for its FINAL answer). No deadline is introduced: a blind
+  transcript falls back to the pane, and a readable-but-unflushed reply is bounded
+  by the consumer's existing patience, never a library timeout ("time is the
+  policy's"). In-process this is a no-op. Triggered most easily by a long reply.
+- **`resume` forwards `-- <agent flags>` like `spawn` does.** The post-`--`
+  passthrough landed on `spawn` only; `resume <name> <id> -- --model opus` now
+  forwards them too. The two boot constructors share one `withBootOptions` builder
+  so they can't drift again.
+- **CLI subprocess tests no longer leak onto the default socket.** The test
+  harness exported `TMUX_SOCKET` (read by nobody — tmux uses `-L`, the substrate
+  uses `CLAUDEMUX_SOCKET`), so harness-spawned CLI processes silently used the
+  *default* socket and could observe sessions from other consumers on the box.
+
 ## [0.2.0] - 2026-06-05
 
 ### Changed
@@ -252,6 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows-native is not supported. tmux is Unix-only; WSL is
   community-contributable, undocumented by the maintainers.
 
+[0.2.1]: https://github.com/wastedcode/claudemux/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/wastedcode/claudemux/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wastedcode/claudemux/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/wastedcode/claudemux/releases/tag/v0.0.1
