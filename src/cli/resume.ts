@@ -4,6 +4,7 @@ import { type CommonOpts, backend, resolveAgent, resolveNamespace } from "./cont
 export interface ResumeCliOpts extends CommonOpts {
   cwd: string;
   bootTimeoutMs?: number;
+  extraArgs?: string[];
   trustWorkspace?: boolean;
 }
 
@@ -24,6 +25,7 @@ export async function resumeCli(
     agent: resolveAgent(opts.agent),
     namespace: resolveNamespace(opts.namespace),
     ...(opts.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: opts.bootTimeoutMs }),
+    ...(opts.extraArgs === undefined ? {} : { extraArgs: opts.extraArgs }),
     ...(opts.trustWorkspace === undefined ? {} : { trustWorkspace: opts.trustWorkspace }),
   });
   // Same shape as spawn — the resumed conversation id, for the next hop.

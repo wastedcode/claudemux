@@ -238,3 +238,61 @@ describe("waitForOutcome — idle/no-progress budget vs a working turn (S8 / F17
     expect(Date.now() - t0).toBeGreaterThanOrEqual(550); // burned maxMs, not the idle window
   });
 });
+
+/**
+ * The cross-process flush gate: a stable idle pane can precede the transcript
+ * flush of a large reply, so `completed` also requires the reply record on disk
+ * (newest message `assistant`) — otherwise a SEPARATE process reading
+ * `messagesSince` right after `completed` sees `[]`. The pane is a settled idle
+ * box throughout (armed off the post-submit baseline); only the transcript tail
+ * evolves. No library deadline: an unflushed reply is bounded by the CONSUMER's
+ * patience, never a timeout.
+ */
+describe("waitForOutcome — cross-process transcript flush gate", () => {
+  const POST_SUBMIT = "you asked: ping\n❯ ";
+  // A reader pinned to a DONE idle pane (armed via baseline divergence), whose
+  // transcript tail role is supplied per-poll by `roleAt`. transcriptCount>0
+  // means "transcript readable", so the gate is active.
+  const flushReader =
+    (roleAt: (i: number) => "user" | "assistant", counter: { n: number }): BeliefReader =>
+    async () => {
+      const role = roleAt(counter.n++);
+      const pane = { state: classify(DONE, agent.rules), interrupted: false };
+      return {
+        belief: believe({ edges: [], transcriptCount: 1, lastMessageRole: role, pane }),
+        paneText: DONE,
+      };
+    };
+  const runFlush = (r: BeliefReader, opts: { maxMs?: number; idleMs?: number }) =>
+    waitForOutcome(
+      new FrameBackend([DONE], paneFingerprint(POST_SUBMIT)),
+      ref,
+      opts,
+      { stabilize },
+      r,
+    );
+
+  it("holds `completed` while the tail is `user`, releases once it is `assistant`", async () => {
+    const counter = { n: 0 };
+    // `user` for the first 4 polls, then the assistant reply lands on disk.
+    const out = await runFlush(
+      flushReader((i) => (i < 4 ? "user" : "assistant"), counter),
+      {
+        maxMs: 5_000,
+      },
+    );
+    expect(out).toEqual({ kind: "completed" });
+    expect(counter.n).toBeGreaterThan(4); // kept polling through the unflushed window
+  });
+
+  it("never falsely completes while the reply is unflushed — the consumer's patience bounds it", async () => {
+    const counter = { n: 0 };
+    // The assistant record never flushes; with a readable transcript the gate
+    // holds, so it must time out as budget-exceeded — NOT report a false completed.
+    const out = await runFlush(
+      flushReader(() => "user", counter),
+      { maxMs: 600 },
+    );
+    expect(out.kind).toBe("budget-exceeded");
+  });
+});

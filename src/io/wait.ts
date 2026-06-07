@@ -46,6 +46,16 @@ export type BeliefReader = () => Promise<{ belief: Belief; paneText: string }>;
  * (bug 8a500a52). Either way, the previous turn's lingering idle never counts:
  * `completed` requires a `stop` edge newer than this wait, or a fresh arm.
  *
+ * **Completion is also flush-safe ACROSS processes.** The pane settling can
+ * precede the transcript flush of a large reply, so an idle pane alone doesn't
+ * prove the reply is on disk — and a *separate* process reading `messagesSince`
+ * right after `completed` shares only that on-disk file. So `completed` also
+ * requires the reply record to be present (the newest message is `assistant`); a
+ * blind transcript (count 0) falls back to the pane. No deadline is added — if a
+ * readable transcript never yields the reply, the CONSUMER's patience bounds it
+ * (the library owns none). In-process this is a no-op (the same observer already
+ * cached the record); it only pays on the cross-process race.
+ *
  * `dialog`/`permission-prompt`/`aborted` are actionable and return immediately
  * (no settle). Never throws on timeout: a budget overrun is a returned
  * `budget-exceeded`, not an exception. (A capture failure inside the reader DOES
@@ -104,7 +114,23 @@ export async function waitForOutcome(
     const hookDone = belief.lastStopAt !== undefined && belief.lastStopAt >= start;
     if (belief.state !== "idle") armed = true;
     else if (baseline !== undefined && paneFingerprint(paneText) !== baseline) armed = true;
-    if (belief.state === "idle" && (hookDone || armed)) {
+
+    // ── cross-process flush gate (bug: messages() reads [] after completed) ──
+    // A stable idle pane can precede the transcript flush of a LARGE reply, so a
+    // SEPARATE process calling messages()/messagesSince() right after `completed`
+    // reads `[]` — the on-disk transcript is the only channel it shares with this
+    // wait. So `completed` also requires the reply record to be on disk: the
+    // newest message is `assistant` (the final reply; a claude tool-result is
+    // `user`-role, so a tool turn waits for its FINAL answer). A blind transcript
+    // (count 0 — hooks off, not yet located, or non-claude) has no record to gate
+    // on, so it falls back to the pane (today's behavior). NO deadline lives here:
+    // if a readable transcript never yields the reply the CONSUMER's patience
+    // bounds it (budget-exceeded), never a library-invented timeout — "time is the
+    // policy's." In-process the same observer already cached the record, so the
+    // gate is a no-op; it only pays on the cross-process race.
+    const paneDone = belief.state === "idle" && (hookDone || armed);
+    const replyOnDisk = belief.transcriptCount === 0 || belief.lastMessageRole === "assistant";
+    if (paneDone && replyOnDisk) {
       // The stabilize debounce is a transport detail (legitimately the library's,
       // per the read/write-split RFC); cap it by any remaining wall-clock budget.
       const remaining =
