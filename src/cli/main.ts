@@ -47,7 +47,7 @@ export function buildProgram(): Command {
       'agent (default: "claude"; only "claude" supported currently)',
     );
 
-  withAgent(program.command("spawn <name>"))
+  withAgent(program.command("spawn <name> [claudeArgs...]"))
     .description("start a session and wait for the REPL to be ready")
     .requiredOption("--cwd <path>", "working directory for the session")
     .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
@@ -55,8 +55,17 @@ export function buildProgram(): Command {
       "--trust-workspace",
       "grant the agent read/edit/execute on --cwd (writes a persistent per-folder trust flag); without it, an untrusted folder fails closed",
     )
-    .action(async (name: string, opts: SpawnCliOpts) => {
-      await spawnCli(name, opts);
+    .addHelpText(
+      "after",
+      "\nArgs after `--` are forwarded verbatim to the agent's CLI, e.g.:\n" +
+        "  claudemux spawn pm --cwd ./repo --trust-workspace -- \\\n" +
+        "    --append-system-prompt-file ./prompt.md --allowed-tools Read Grep --model opus",
+    )
+    .action(async (name: string, claudeArgs: string[], opts: SpawnCliOpts) => {
+      await spawnCli(name, {
+        ...opts,
+        ...(claudeArgs.length > 0 ? { extraArgs: claudeArgs } : {}),
+      });
     });
 
   withAgent(program.command("resume <name> <agentSessionId>"))
