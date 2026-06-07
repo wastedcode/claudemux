@@ -68,7 +68,11 @@ function buildEnv(sandbox: SandboxHome, socket: string): Record<string, string> 
     XDG_CACHE_HOME: sandbox.xdgCache,
     XDG_DATA_HOME: sandbox.xdgData,
     XDG_STATE_HOME: sandbox.xdgState,
-    TMUX_SOCKET: socket,
+    // The substrate selects its private socket from CLAUDEMUX_SOCKET (see
+    // default-backend.ts); a bare TMUX_SOCKET is read by nobody (tmux uses -L,
+    // not an env var), so CLI subprocesses would silently fall to the DEFAULT
+    // socket and see sessions from any other consumer on the box.
+    CLAUDEMUX_SOCKET: socket,
     LC_ALL: "C.UTF-8",
     TERM: "xterm-256color",
     PATH: CURATED_PATH,
