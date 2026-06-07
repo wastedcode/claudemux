@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import { Harness, claudeBinDir } from "../harness/index.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
 const binPath = join(repoRoot, "bin", "claudemux");
+const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
 
 // Real-claude boot is out of the hermetic gate (no `claude` in `npm test`/CI).
 // The block below spawns the installed-but-logged-OUT claude binary; run it
@@ -78,6 +79,13 @@ describe("CLI — bin/claudemux exists and is runnable", () => {
     ]) {
       expect(r.stdout).toContain(verb);
     }
+  });
+
+  it("--version prints the package version", async () => {
+    const r = await runCli(["--version"]);
+    expect(r.exit).toBe(0);
+    expect(r.stdout.trim()).toBe(packageVersion);
+    expect(r.stderr).toBe("");
   });
 
   it("--help output for every verb has ZERO references to 'tmux'", async () => {
