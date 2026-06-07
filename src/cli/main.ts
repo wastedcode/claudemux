@@ -47,35 +47,34 @@ export function buildProgram(): Command {
       'agent (default: "claude"; only "claude" supported currently)',
     );
 
-  withAgent(program.command("spawn <name> [claudeArgs...]"))
+  // The two boot constructors — `spawn` (fresh) and `resume` (continue in a
+  // fresh pane) — take the SAME lifecycle flags (cwd / boot-timeout /
+  // trust-workspace) and the SAME `-- <agent flags>` passthrough. Factor that
+  // shared shape into one builder so the two can't drift (a `--`-passthrough
+  // that lived only on `spawn` is exactly how they diverged once before).
+  const withBootOptions = (cmd: Command) =>
+    withAgent(cmd)
+      .requiredOption("--cwd <path>", "working directory for the session")
+      .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
+      .option(
+        "--trust-workspace",
+        "grant the agent read/edit/execute on --cwd (writes a persistent per-folder trust flag); without it, an untrusted folder fails closed",
+      )
+      .addHelpText("after", PASSTHROUGH_HELP);
+
+  withBootOptions(program.command("spawn <name> [claudeArgs...]"))
     .description("start a session and wait for the REPL to be ready")
-    .requiredOption("--cwd <path>", "working directory for the session")
-    .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
-    .option(
-      "--trust-workspace",
-      "grant the agent read/edit/execute on --cwd (writes a persistent per-folder trust flag); without it, an untrusted folder fails closed",
-    )
-    .addHelpText(
-      "after",
-      "\nArgs after `--` are forwarded verbatim to the agent's CLI, e.g.:\n" +
-        "  claudemux spawn pm --cwd ./repo --trust-workspace -- \\\n" +
-        "    --append-system-prompt-file ./prompt.md --allowed-tools Read Grep --model opus",
-    )
     .action(async (name: string, claudeArgs: string[], opts: SpawnCliOpts) => {
-      await spawnCli(name, {
-        ...opts,
-        ...(claudeArgs.length > 0 ? { extraArgs: claudeArgs } : {}),
-      });
+      await spawnCli(name, withExtraArgs(opts, claudeArgs));
     });
 
-  withAgent(program.command("resume <name> <agentSessionId>"))
+  withBootOptions(program.command("resume <name> <agentSessionId> [claudeArgs...]"))
     .description("continue an existing conversation in a fresh pane")
-    .requiredOption("--cwd <path>", "working directory for the session")
-    .option("--boot-timeout-ms <ms>", "boot timeout (default 60000)", parseIntOpt)
-    .option("--trust-workspace", "grant the agent read/edit/execute on --cwd (see spawn)")
-    .action(async (name: string, agentSessionId: string, opts: ResumeCliOpts) => {
-      await resumeCli(name, agentSessionId, opts);
-    });
+    .action(
+      async (name: string, agentSessionId: string, claudeArgs: string[], opts: ResumeCliOpts) => {
+        await resumeCli(name, agentSessionId, withExtraArgs(opts, claudeArgs));
+      },
+    );
 
   withAgent(program.command("send <name> <text>"))
     .description("deliver text as one logical user turn (use '-' to read from stdin)")
@@ -162,6 +161,24 @@ function parseIntOpt(raw: string): number {
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n)) throw new Error(`invalid integer: ${raw}`);
   return n;
+}
+
+/** Shared help for the `-- <agent flags>` passthrough on `spawn`/`resume`. */
+const PASSTHROUGH_HELP =
+  "\nArgs after `--` are forwarded verbatim to the agent's CLI, e.g.:\n" +
+  "  claudemux spawn pm --cwd ./repo --trust-workspace -- \\\n" +
+  "    --append-system-prompt-file ./prompt.md --allowed-tools Read Grep --model opus";
+
+/**
+ * Fold a commander variadic (the tokens after `--`) into a boot verb's
+ * `extraArgs`. Shared by `spawn` and `resume` so the passthrough lands on both
+ * identically — an empty tail leaves `extraArgs` unset (the library default).
+ */
+function withExtraArgs<T extends object>(
+  opts: T,
+  claudeArgs: string[],
+): T & { extraArgs?: string[] } {
+  return claudeArgs.length > 0 ? { ...opts, extraArgs: claudeArgs } : opts;
 }
 
 /** Entry point — handles typed-error exit codes uniformly. */
