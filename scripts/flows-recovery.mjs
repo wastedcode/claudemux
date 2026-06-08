@@ -9,7 +9,7 @@
  * resume recovers) · F21 adopt (pane survived) · F28 interrupt→aborted ·
  * F30 interrupt scrollback guard. Isolated socket; every session killed.
  */
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { adopt, create, exists, kill, list, recover, resume } from "../dist/index.js";
 
@@ -17,6 +17,11 @@ const SOCK = process.env.CLAUDEMUX_SOCKET ?? "cmux-flows";
 const CWD = "/tmp/cmux-flows";
 mkdirSync(CWD, { recursive: true });
 const NS = "cmux-flows";
+
+// All tmux control goes through execFile (argv, no shell), so SOCK — which can
+// come from CLAUDEMUX_SOCKET (an env value) — can never be interpreted as shell
+// syntax. Returns stdout as a string (empty for commands that print nothing).
+const tmux = (...args) => execFileSync("tmux", ["-L", SOCK, "-f", "/dev/null", ...args]).toString();
 const results = [];
 const rec = (flow, name, ok, detail = "") => {
   results.push({ flow, name, ok });
@@ -63,7 +68,7 @@ async function f20() {
   await s.wait();
   const cEssay = await s.send("Write a detailed 600-word essay about Unix history. Output it now.");
   await sleep(4500); // generating
-  execSync(`tmux -L ${SOCK} -f /dev/null kill-server`); // ← real crash, mid-turn
+  tmux("kill-server"); // ← real crash, mid-turn
   await sleep(500);
   rec(
     "F20",
@@ -125,11 +130,9 @@ async function f22() {
     await sleep(4500); // generating, mid-turn
     // Close ONLY A's session (match its unique name; don't assume the internal
     // encoding), leaving the tmux server + B alive.
-    const names = execSync(`tmux -L ${SOCK} -f /dev/null list-sessions -F '#{session_name}'`)
-      .toString()
-      .split("\n");
+    const names = tmux("list-sessions", "-F", "#{session_name}").split("\n");
     const target = names.find((n) => n.includes(aName));
-    execSync(`tmux -L ${SOCK} -f /dev/null kill-session -t ${target}`);
+    if (target) tmux("kill-session", "-t", target);
     await sleep(500);
 
     rec(
@@ -201,10 +204,9 @@ async function frecover() {
     r1.status,
   );
   // Crash A's pane (close the session).
-  const names = execSync(`tmux -L ${SOCK} -f /dev/null list-sessions -F '#{session_name}'`)
-    .toString()
-    .split("\n");
-  execSync(`tmux -L ${SOCK} -f /dev/null kill-session -t ${names.find((n) => n.includes(a))}`);
+  const names = tmux("list-sessions", "-F", "#{session_name}").split("\n");
+  const target = names.find((n) => n.includes(a));
+  if (target) tmux("kill-session", "-t", target);
   await sleep(500);
   // (2) pane GONE → recover resumes the SAME conversation in a fresh pane.
   const r2 = await recover({ ...opts(a), agentSessionId: id });

@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,10 @@ const repoRoot = process.cwd();
 
 function runScript(script: string, cwd: string): { exit: number; stderr: string } {
   try {
-    execSync(`bash ${repoRoot}/scripts/${script} .`, {
+    // execFile (argv array), not a shell string: `bash <path> .` runs with no
+    // shell, so the repo path (process.cwd()) can't be interpreted as shell
+    // syntax even if it contains metacharacters (CodeQL: shell-command-from-env).
+    execFileSync("bash", [join(repoRoot, "scripts", script), "."], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });

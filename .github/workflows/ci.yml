@@ -10,6 +10,12 @@
 
 name: ci
 
+# Least privilege for GITHUB_TOKEN: both jobs only check out and run build/test
+# — neither writes to the repo, comments, or publishes. A top-level block applies
+# to every job and sets all unlisted scopes to `none` (CodeQL: missing-permissions).
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, "init/**"]

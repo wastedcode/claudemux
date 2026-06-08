@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-07
+
+### Added
+
+- **`claudemux --version`** prints the package version (read from `package.json`).
+  Previously rejected as an unknown option. Thanks to an external contributor.
+
+### Security
+
+- **No consumer-facing vulnerabilities** — the items below are dev/CI hardening
+  only; the published package ships `dist/` + `bin/` (no `node_modules`), so none
+  of these ever reached installs of `@wastedcode/claudemux`.
+- Upgraded **vitest 2 → 4** to clear three dev-dependency advisories (vitest UI
+  arbitrary-file read/exec — the UI server is never run here; transitive vite
+  `.map` path traversal; esbuild dev-server). `npm audit` is now clean.
+- Hardened subprocess calls in the test/dev scripts to build argv arrays via
+  `execFile` instead of interpolating values (incl. `CLAUDEMUX_SOCKET`) into a
+  shell string. Shipped `src/` was already shell-free.
+- CI workflow now declares least-privilege `permissions: contents: read`.
+
 ## [0.2.1] - 2026-06-07
 
 ### Fixed
@@ -279,6 +299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows-native is not supported. tmux is Unix-only; WSL is
   community-contributable, undocumented by the maintainers.
 
+[0.2.2]: https://github.com/wastedcode/claudemux/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/wastedcode/claudemux/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/wastedcode/claudemux/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wastedcode/claudemux/compare/v0.0.1...v0.1.0
