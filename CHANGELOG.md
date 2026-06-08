@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`claudemux --version`** prints the package version (read from `package.json`).
   Previously rejected as an unknown option. Thanks to an external contributor.
 
+### Security
+
+- **No consumer-facing vulnerabilities** — the items below are dev/CI hardening
+  only; the published package ships `dist/` + `bin/` (no `node_modules`), so none
+  of these ever reached installs of `@wastedcode/claudemux`.
+- Upgraded **vitest 2 → 4** to clear three dev-dependency advisories (vitest UI
+  arbitrary-file read/exec — the UI server is never run here; transitive vite
+  `.map` path traversal; esbuild dev-server). `npm audit` is now clean.
+- Hardened subprocess calls in the test/dev scripts to build argv arrays via
+  `execFile` instead of interpolating values (incl. `CLAUDEMUX_SOCKET`) into a
+  shell string. Shipped `src/` was already shell-free.
+- CI workflow now declares least-privilege `permissions: contents: read`.
+
 ## [0.2.1] - 2026-06-07
 
 ### Fixed
