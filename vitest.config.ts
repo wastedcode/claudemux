@@ -30,9 +30,12 @@ export default defineConfig({
     // test/harness/harness.test.ts deliberately mutates that file to prove
     // the guard catches what it exists for; running other integration tests
     // in parallel would observe the mid-mutation state and false-positive.
-    // Serial file execution keeps the sentinel guard reliable.
+    // Serial file execution keeps the sentinel guard reliable. `fileParallelism:
+    // false` is the load-bearing setting (no two files run at once); `maxWorkers:
+    // 1` pins a single worker. Vitest 4 removed `poolOptions.forks.singleFork` in
+    // favor of these top-level options (migration: pool-rework).
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
     fileParallelism: false,
+    maxWorkers: 1,
   },
 });
