@@ -1,6 +1,6 @@
 {
   "name": "@wastedcode/claudemux",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publishConfig": {
     "access": "public"
   },
@@ -14,7 +14,15 @@
   "bugs": {
     "url": "https://github.com/wastedcode/claudemux/issues"
   },
-  "keywords": ["claude", "claude-code", "tmux", "agent", "cli", "substrate", "automation"],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tmux",
+    "agent",
+    "cli",
+    "substrate",
+    "automation"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +35,13 @@
   "bin": {
     "claudemux": "./bin/claudemux"
   },
-  "files": ["dist/", "bin/", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "dist/",
+    "bin/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "engines": {
     "node": ">=20"
   },

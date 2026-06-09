@@ -27,6 +27,14 @@ export function targetOf(namespace: string, name: string): string {
  * substrate's supported floor (see README §Compatibility / details.md
  * §Quality). `set-environment` after `new-session` is not an option — it
  * doesn't affect the already-spawned pane process.
+ *
+ * `o.unsetEnv` names env vars to genuinely UNSET for the pane process. tmux's
+ * `-e` can only set (`-e VAR=` blanks, it cannot unset), so the launch command
+ * is wrapped in an `env -u NAME … --` prefix — the only mechanism that yields a
+ * genuinely-absent variable in the pane process, and one immune to the
+ * shared/baked-server trap because it acts at exec time on the pane command
+ * itself (ADR 0008). A name that also appears in the set `env` keeps its `-e`
+ * and drops its `-u` (explicit set wins).
  */
 export async function newSession(
   exec: TmuxExec,
@@ -37,6 +45,8 @@ export async function newSession(
     env?: Record<string, string>;
     cmd: string;
     argv: string[];
+    /** Env var names to genuinely unset for the pane process (an `env -u` prefix). */
+    unsetEnv?: string[];
     /** User-facing label for error messages (defaults to tmux target encoding). */
     label?: string;
   },
@@ -49,6 +59,18 @@ export async function newSession(
   // `env: { LC_ALL }` (claude does) doesn't produce a duplicate `-e` flag.
   const env: Record<string, string> = { LC_ALL: "C.UTF-8", ...o.env };
   const envFlags = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+
+  // Resolve the unset∩set overlap HERE: drop `-u` for any name also `-e` set,
+  // so the explicit set wins and `env` never both unsets and re-sets a name.
+  // The `--` terminator stops `env` from parsing cmd/argv as its own options.
+  // Empty/absent unsetEnv → `launch = [cmd, ...argv]`, byte-identical to before.
+  const setKeys = new Set(Object.keys(env));
+  const unsetNames = (o.unsetEnv ?? []).filter((n) => !setKeys.has(n));
+  const launch =
+    unsetNames.length > 0
+      ? ["env", ...unsetNames.flatMap((n) => ["-u", n]), "--", o.cmd, ...o.argv]
+      : [o.cmd, ...o.argv];
+
   const newSessionCmd = [
     "new-session",
     "-d",
@@ -62,8 +84,7 @@ export async function newSession(
     ...envFlags,
     "-c",
     o.cwd,
-    o.cmd,
-    ...o.argv,
+    ...launch,
   ];
 
   // Combine server-options + new-session into ONE tmux invocation so the

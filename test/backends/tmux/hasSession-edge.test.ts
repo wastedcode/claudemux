@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TmuxExec } from "../../../src/backends/tmux/exec.js";
 import { tmuxBackend } from "../../../src/backends/tmux/index.js";
 import { hasSession, newSession, targetOf } from "../../../src/backends/tmux/sessions.js";
-import { InvalidSessionName } from "../../../src/errors.js";
+import { InvalidEnvVarName, InvalidSessionName } from "../../../src/errors.js";
 import { Harness } from "../../harness/index.js";
 
 /**
@@ -105,5 +105,19 @@ describe("tmuxBackend wrapper — exists/kill total for reserved-char names (QA 
         argv: ["60"],
       }),
     ).rejects.toBeInstanceOf(InvalidSessionName);
+  });
+
+  it("spawn() rejects a malformed unsetEnv name with InvalidEnvVarName", async () => {
+    const backend = tmuxBackend({ socket: h.socket });
+    await expect(
+      backend.spawn({
+        namespace: "ns",
+        name: "ok",
+        cwd: h.sandbox.home,
+        cmd: "sleep",
+        argv: ["60"],
+        unsetEnv: ["-X"],
+      }),
+    ).rejects.toBeInstanceOf(InvalidEnvVarName);
   });
 });

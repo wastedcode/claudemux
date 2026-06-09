@@ -75,6 +75,9 @@ export async function spawnBootHandle(o: SpawnBootInput): Promise<SessionHandle>
     env: mergedEnv,
     cmd: argvBuild.cmd,
     argv: argvBuild.argv,
+    ...(argvBuild.unsetEnv && argvBuild.unsetEnv.length > 0
+      ? { unsetEnv: argvBuild.unsetEnv }
+      : {}),
   });
 
   // The caller-known id to attribute a boot-death to: the resume id, or an

@@ -232,6 +232,22 @@ const RESUME_FLAGS = ["--resume", "-r"];
 const FORK_FLAG = "--fork-session";
 
 /**
+ * Parent-agent env vars that make a spawned claude believe it is NESTED and
+ * SUPPRESS its own transcript persistence (writes only an async ai-title
+ * record). claudemux drives the agent by READING that transcript, so a
+ * suppressed agent is broken (ADR 0008). The SOLE file that knows these names
+ * (layering grep T12). A/B-proven (2026-06-09, claude 2.1.168/.169): the FULL
+ * set must be unset — the detection trips on any single remaining signal.
+ */
+const NESTED_AGENT_ENV: readonly string[] = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_EXECPATH",
+  "AI_AGENT",
+];
+
+/**
  * What identity flag (if any) the caller already put in `extraArgs`, and the
  * id it selects. For `session-id`/`resume`, `value === undefined` means "an id
  * we cannot know up front" (a bare `--resume`). `fork` carries no value at all
@@ -312,6 +328,7 @@ function buildArgv(o: {
   cmd: string;
   argv: string[];
   env: Record<string, string>;
+  unsetEnv: string[];
   agentSessionId?: string;
 } {
   void o.cwd; // cwd is plumbed by the session/backend layer at spawn time
@@ -328,6 +345,7 @@ function buildArgv(o: {
       cmd: "claude",
       argv: [RESUME_FLAGS[0] as string, o.resumeFrom, ...extraArgs],
       env,
+      unsetEnv: [...NESTED_AGENT_ENV],
       agentSessionId: o.resumeFrom,
     };
   }
@@ -347,6 +365,7 @@ function buildArgv(o: {
       cmd: "claude",
       argv: extraArgs,
       env,
+      unsetEnv: [...NESTED_AGENT_ENV],
       ...(surfaced === undefined ? {} : { agentSessionId: surfaced }),
     };
   }
@@ -358,12 +377,13 @@ function buildArgv(o: {
       cmd: "claude",
       argv: [SESSION_ID_FLAG, o.sessionId, ...extraArgs],
       env,
+      unsetEnv: [...NESTED_AGENT_ENV],
       agentSessionId: o.sessionId,
     };
   }
 
   // No id at all (e.g. an internal caller that didn't mint one) — pass through.
-  return { cmd: "claude", argv: extraArgs, env };
+  return { cmd: "claude", argv: extraArgs, env, unsetEnv: [...NESTED_AGENT_ENV] };
 }
 
 /** The `claude` agent definition. */

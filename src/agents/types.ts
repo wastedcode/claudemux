@@ -90,6 +90,15 @@ export interface AgentDef {
     cmd: string;
     argv: string[];
     env?: Record<string, string>;
+    /**
+     * Env var NAMES to genuinely UNSET for the spawned process (a TRUE unset,
+     * not a blank). Applied BEFORE the session-layer env merge, so a name that
+     * also appears in the merged `env` ends up SET (consumer re-set wins). The
+     * backend emits this however its substrate truly unsets a var (tmux: an
+     * `env -u NAME` launch prefix — `-e VAR=` only blanks, it cannot unset). The
+     * agent owns the LIST; the backend owns the mechanism.
+     */
+    unsetEnv?: string[];
     agentSessionId?: string;
   };
 

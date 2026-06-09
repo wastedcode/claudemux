@@ -191,6 +191,88 @@ describe("sessions module — namespace-isolated CRUD", () => {
     expect(await hasSession(exec, target)).toBe(false);
   });
 
+  // ── unsetEnv → `env -u` launch prefix (ADR 0008) ─────────────────────────
+  // Assert the EMITTED new-session argv via onCommand (no dependence on the
+  // wrapped command's runtime behavior): the scrub is a command-assembly
+  // concern, so inspecting the issued argv is the right unit.
+  describe("unsetEnv emits an `env -u … --` launch prefix", () => {
+    /** Capture the new-session argv issued for one spawn. */
+    async function spawnAndCapture(o: {
+      name: string;
+      cmd: string;
+      argv: string[];
+      env?: Record<string, string>;
+      unsetEnv?: string[];
+    }): Promise<string[]> {
+      let issued: string[] | undefined;
+      const off = exec.onCommand((e) => {
+        if (e.argv.includes("new-session")) issued = e.argv;
+      });
+      await newSession(exec, {
+        namespace: NS,
+        name: o.name,
+        cwd: h.sandbox.home,
+        cmd: o.cmd,
+        argv: o.argv,
+        ...(o.env ? { env: o.env } : {}),
+        ...(o.unsetEnv ? { unsetEnv: o.unsetEnv } : {}),
+      });
+      off();
+      expect(issued).toBeDefined();
+      return issued ?? [];
+    }
+
+    it("wraps the launch in `env -u NAME … -- <cmd> <argv>` for each unset name", async () => {
+      const argv = await spawnAndCapture({
+        name: "scrub",
+        cmd: "sleep",
+        argv: ["60"],
+        unsetEnv: ["CLAUDECODE", "AI_AGENT"],
+      });
+      // The pane command must read: env -u CLAUDECODE -u AI_AGENT -- sleep 60
+      const launch = argv.slice(argv.indexOf("env"));
+      expect(launch).toEqual([
+        "env",
+        "-u",
+        "CLAUDECODE",
+        "-u",
+        "AI_AGENT",
+        "--",
+        "sleep",
+        "60",
+      ]);
+    });
+
+    it("drops `-u NAME` for a name also in the set env — explicit set wins, emits `-e`", async () => {
+      const argv = await spawnAndCapture({
+        name: "overlap",
+        cmd: "sleep",
+        argv: ["60"],
+        env: { CLAUDECODE: "1" },
+        unsetEnv: ["CLAUDECODE"],
+      });
+      // The set value rides as `-e CLAUDECODE=1` …
+      expect(argv).toContain("-e");
+      expect(argv).toContain("CLAUDECODE=1");
+      // … and the `-u CLAUDECODE` is dropped, so no `env` wrapper at all
+      // (it was the only unset name).
+      expect(argv).not.toContain("-u");
+      expect(argv).not.toContain("env");
+    });
+
+    it("empty/absent unsetEnv → exactly `<cmd> <argv>` with no `env` wrapper", async () => {
+      const argv = await spawnAndCapture({
+        name: "noscrub",
+        cmd: "sleep",
+        argv: ["60"],
+      });
+      expect(argv).not.toContain("env");
+      expect(argv).not.toContain("-u");
+      // The command tail is the bare cmd + argv, byte-identical to before.
+      expect(argv.slice(argv.length - 2)).toEqual(["sleep", "60"]);
+    });
+  });
+
   it("applies the five per-session options (verifies escape-time + history-limit at minimum)", async () => {
     const NAME = "opts";
     const target = targetOf(NS, NAME);
