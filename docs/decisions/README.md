@@ -19,3 +19,4 @@ record, it cites one of these repo-relative paths, which resolve on GitHub.
 | [0005](0005-adopt-reuses-sessiongone.md) | `adopt()` reuses `SessionGone` for an absent session (symmetric with `create`/`SessionExists`); no new error class. |
 | [0006](0006-adopt-single-writer-invariant-no-lock.md) | `adopt()` documents a single-writer invariant, adds no cross-process lock, and is a pure attach (no dialog dismissal); `state()`-after-adopt carries the safety. |
 | [0007](0007-pane-dead-detection-and-signal-representation.md) | _(superseded)_ `PaneDead` detection + signal representation. `PaneDead` was removed (`remain-on-exit off` reaps the pane → `SessionGone`). |
+| [0008](0008-scrub-parent-agent-env-for-transcript-persistence.md) | The spawned `claude` runs under an `env -u` scrub of the parent agent's env vars (`CLAUDECODE`, `CLAUDE_CODE_*`, `AI_AGENT`) so its transcript persists; threaded via a new optional `unsetEnv` on `buildArgv`; consumer `env` re-set wins. |

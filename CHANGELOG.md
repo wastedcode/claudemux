@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-09
+
+### Fixed
+
+- **Spawned agents now persist their conversation transcript when claudemux is
+  itself run from inside another Claude Code session.** A child `claude` that
+  inherited the parent's `CLAUDECODE` / `CLAUDE_CODE_*` / `AI_AGENT` environment
+  variables tripped claude's nested-session detection and wrote only an
+  `ai-title` record — no `user`/`assistant` turns — leaving claudemux (which
+  drives agents by *reading* the transcript) to see an empty conversation:
+  stalled gating, empty `messagesSince`, delivery never confirmed. claudemux now
+  scrubs those variables at the pane-launch boundary (`env -u … -- claude …`, a
+  true unset — `-e VAR=` only blanks, which still trips the heuristic, and the
+  shared persistent tmux server makes `process.env` mutation unreliable) so a
+  spawned agent is always a top-level session that owns its own transcript. The
+  existing `env` passthrough remains the escape hatch (a deliberate re-set wins).
+  Root-caused via A/B across claude 2.1.168/2.1.169 — not a version regression.
+  See [ADR 0008](docs/decisions/0008-scrub-parent-agent-env-for-transcript-persistence.md).
+
+### Security
+
+- **Validate `unsetEnv` names at the backend boundary** (`InvalidEnvVarName`).
+  Env-var names spliced into the `env -u` launch prefix must be POSIX
+  identifiers (`[A-Za-z_][A-Za-z0-9_]*`). Not consumer-exploitable today — the
+  sole producer is a trusted constant and the spawn path is shell-free
+  `execFile` argv — but it closes the seam against any future untrusted producer
+  (complete mediation at the boundary). ADR 0008 follow-up.
+
 ## [0.2.2] - 2026-06-07
 
 ### Added

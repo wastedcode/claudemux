@@ -242,3 +242,44 @@ describe("create() uses the claude agent's buildArgv by default", () => {
     expect(r.argv).toEqual(["--session-id", CALLER_UUID]);
   });
 });
+
+/**
+ * The parent-agent env scrub (ADR 0008): every buildArgv path returns the same
+ * five names to unset so a spawned claude never trips its own nested-session
+ * detection and suppresses its transcript — the channel claudemux drives on.
+ * The scrub is additive: `cmd`/`argv` (the security-pinned identity shape)
+ * stay byte-identical to before.
+ */
+describe("claude.buildArgv — unsetEnv scrubs the parent-agent env (ADR 0008)", () => {
+  const NESTED = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_EXECPATH",
+    "AI_AGENT",
+  ];
+
+  it("fresh --session-id path returns the five names AND keeps cmd/argv unchanged", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", sessionId: CALLER_UUID });
+    expect(r.unsetEnv).toEqual(NESTED);
+    // The existing identity invariant must remain green.
+    expect(r.cmd).toBe("claude");
+    expect(r.argv).toEqual(["--session-id", CALLER_UUID]);
+  });
+
+  it("resume path returns the same five names", () => {
+    const r = claude.buildArgv({ cwd: "/tmp", resumeFrom: CALLER_UUID });
+    expect(r.unsetEnv).toEqual(NESTED);
+    expect(r.cmd).toBe("claude");
+    expect(r.argv).toEqual(["--resume", CALLER_UUID]);
+  });
+
+  it("caller-identity (extraArgs) path returns the same five names", () => {
+    const r = claude.buildArgv({
+      cwd: "/tmp",
+      extraArgs: ["--resume", CALLER_UUID],
+    });
+    expect(r.unsetEnv).toEqual(NESTED);
+    expect(r.cmd).toBe("claude");
+  });
+});

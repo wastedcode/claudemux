@@ -1,5 +1,5 @@
 import { InvalidSessionName } from "../../errors.js";
-import { validateNamePart } from "../../session/validate.js";
+import { validateEnvVarName, validateNamePart } from "../../session/validate.js";
 import {
   type Backend,
   type BackendEvent,
@@ -62,11 +62,13 @@ export function tmuxBackend(opts: { socket: string }): Backend {
     spawn: async (o) => {
       validateNamePart("namespace", o.namespace);
       validateNamePart("name", o.name);
+      for (const name of o.unsetEnv ?? []) validateEnvVarName(name); // ADR 0008 follow-up
       await newSession(exec, {
         namespace: o.namespace,
         name: o.name,
         cwd: o.cwd,
         ...(o.env ? { env: o.env } : {}),
+        ...(o.unsetEnv ? { unsetEnv: o.unsetEnv } : {}),
         cmd: o.cmd,
         argv: o.argv,
         label: formatSessionLabel({ namespace: o.namespace, name: o.name }),

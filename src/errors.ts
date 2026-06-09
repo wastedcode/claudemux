@@ -61,6 +61,33 @@ export class InvalidAgentSessionId extends ClaudemuxError {
 }
 
 /**
+ * Thrown at the backend boundary when an `unsetEnv` name is not a well-formed
+ * POSIX environment-variable name (`[A-Za-z_][A-Za-z0-9_]*`). Thrown *before
+ * spawn*, at the substrate boundary.
+ *
+ * @remarks
+ * Defense-in-depth (ADR 0008 follow-up). The name is spliced into the backend's
+ * `env -u NAME …` pane-launch prefix. It always stays a single argv element — no
+ * shell, so no shell-escape and no second command — but a malformed name (a
+ * leading `-`, an embedded `=`/space, the empty string) could mis-instruct `env`
+ * for that one spawn. The sole current producer is a trusted constant, so this
+ * never fires today; the guard protects the seam against a future untrusted
+ * producer. Do not relax to a loose check — the allow-list shape is the point.
+ */
+export class InvalidEnvVarName extends ClaudemuxError {
+  /** The malformed env-var name the caller passed. */
+  readonly value: string;
+
+  constructor(value: string) {
+    super(
+      `invalid unsetEnv name ${JSON.stringify(value)}: must be a POSIX env var name ([A-Za-z_][A-Za-z0-9_]*)`,
+      "<invalid-unsetEnv>",
+    );
+    this.value = value;
+  }
+}
+
+/**
  * Thrown by {@link create} when the caller passes an explicit
  * `agentSessionId` **and** an identity flag in `extraArgs` that also selects a
  * conversation id (claude: `--session-id`, `-r`/`--resume`, `--fork-session`).

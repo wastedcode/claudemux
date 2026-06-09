@@ -75,6 +75,12 @@ export interface Backend {
       env?: Record<string, string>;
       cmd: string;
       argv: string[];
+      /**
+       * Env var names to genuinely UNSET for the spawned process — see
+       * {@link AgentDef.buildArgv}'s `unsetEnv`. The backend emits this however
+       * its substrate truly unsets a var (a name also in `env` stays SET).
+       */
+      unsetEnv?: string[];
     },
   ): Promise<void>;
 
