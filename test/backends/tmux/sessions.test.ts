@@ -231,16 +231,7 @@ describe("sessions module — namespace-isolated CRUD", () => {
       });
       // The pane command must read: env -u CLAUDECODE -u AI_AGENT -- sleep 60
       const launch = argv.slice(argv.indexOf("env"));
-      expect(launch).toEqual([
-        "env",
-        "-u",
-        "CLAUDECODE",
-        "-u",
-        "AI_AGENT",
-        "--",
-        "sleep",
-        "60",
-      ]);
+      expect(launch).toEqual(["env", "-u", "CLAUDECODE", "-u", "AI_AGENT", "--", "sleep", "60"]);
     });
 
     it("drops `-u NAME` for a name also in the set env — explicit set wins, emits `-e`", async () => {

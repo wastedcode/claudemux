@@ -11,12 +11,15 @@ describe("validateEnvVarName", () => {
   // Regression guard for the real producer: every NESTED_AGENT_ENV name in
   // src/agents/claude.ts must validate, or we'd break the trusted nested-agent
   // launch path.
-  it.each(["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_EXECPATH", "AI_AGENT"])(
-    "accepts the NESTED_AGENT_ENV name %s",
-    (name) => {
-      expect(() => validateEnvVarName(name)).not.toThrow();
-    },
-  );
+  it.each([
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_EXECPATH",
+    "AI_AGENT",
+  ])("accepts the NESTED_AGENT_ENV name %s", (name) => {
+    expect(() => validateEnvVarName(name)).not.toThrow();
+  });
 
   it.each(["_FOO", "X"])("accepts the identifier-shaped name %s", (name) => {
     expect(() => validateEnvVarName(name)).not.toThrow();
