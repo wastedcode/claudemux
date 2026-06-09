@@ -22,6 +22,12 @@ export default defineConfig({
       // by CLAUDEMUX_LIVE_AGENT_SESSION_ID=1) to prove the id round-trip,
       // resume-via-extraArgs, and the collision error — same isolation reason.
       "test/session/agent-session-id.live.test.ts",
+      // transcript-persistence.live.test.ts spawns a REAL authenticated claude
+      // (gated by CLAUDEMUX_LIVE_TRANSCRIPT_PERSISTENCE=1) on a tmux server
+      // booted with the nested-agent env baked in, to prove the ADR 0008 scrub
+      // restores transcript persistence — same isolation reason. Maintainer
+      // acceptance test; never a CI gate.
+      "test/session/transcript-persistence.live.test.ts",
     ],
     testTimeout: 30_000,
     hookTimeout: 30_000,

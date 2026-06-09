@@ -166,6 +166,24 @@ and its baked `env: process.env` are in `src/backends/tmux/exec.ts` + `socket.ts
 five-variable `env -u` prefix restoring a 10-record transcript; single-variable unset insufficient) was
 A/B-validated on 2026-06-09 against claude 2.1.168/2.1.169.
 
+**Refinement (2026-06-09): claude's suppression is environment-fragile; the regression test asserts the
+scrub, not the suppression.** A deeper A/B (claude 2.1.168/2.1.169/2.1.170 — the binary auto-updated mid-
+investigation) found the *same* binary both suppresses and persists depending on which **other** env vars
+are present alongside `CLAUDECODE` (a node/npm launch context, for instance, flips it back to persisting).
+The nested-detection is an opaque, version- and environment-dependent heuristic — which both explains the
+*intermittent* history of the gremlin and means a behavioural assertion ("did claude suppress the
+transcript?") is a **non-deterministic guard**: it can pass even with the fix reverted, under a non-
+suppressing env. The first draft of the live test asserted persistence behaviourally and indeed gave a
+**false pass** (its negative control did not fail). The shipped live regression
+(`test/session/transcript-persistence.live.test.ts`, gated `CLAUDEMUX_LIVE_TRANSCRIPT_PERSISTENCE=1`,
+excluded from CI) instead asserts the fix's **own observable effect**: under a tmux server whose global env
+carries all five nested vars, a claudemux-spawned claude process has all five **scrubbed** from its
+`/proc/<pid>/environ`. That absence is the necessary-and-sufficient cause of correct persistence, it is
+version-independent, and its negative control is real — reverting the `env -u` emission leaks all five into
+the pane (verified: test passes with the fix, fails without). The `env -u` prefix and the structural
+avoidance of the baked-server trap (Consequences) are unchanged; only the *form of the proof* is refined
+from "observe claude persist" to "observe claudemux scrub."
+
 ## Follow-up (2026-06-09): validate `unsetEnv` names at the backend boundary
 
 A security review of the shipped scrub accepted, named, and deemed **non-blocking** a defense-in-depth
